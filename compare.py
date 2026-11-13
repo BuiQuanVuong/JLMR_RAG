@@ -195,6 +195,8 @@ def run(ix, a, call_claude, models):
         sys.exit(f"Anthropic API error during extraction: {e}")
 
     stage1_cost = sum(c for _, c, _ in results)
+    import ui
+    ui.add_cost(stage1_cost)
     records = []
     for i, (k, (rec, _, err)) in enumerate(zip(keys, results), 1):
         if err or rec is None:

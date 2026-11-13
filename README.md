@@ -25,6 +25,19 @@ cd D:\Academic_Papers\jmlr_rag
 
 ## Usage
 
+**One-word start:** `jmlr-rag` (no arguments) opens chat, and `jmlr-rag search "..."`, `jmlr-rag topics` and
+so on work like `python ask.py ...`. It's installed in the project environment with
+`.venv\Scripts\python -m pip install --no-deps -e .`. To use it from any terminal, copy `bin\jmlr-rag.cmd`
+into a folder on your PATH, such as `%LOCALAPPDATA%\Microsoft\WindowsApps`.
+
+**In a terminal**, answers are rendered as formatted Markdown (headings, tables, bold) while they stream, and
+a spinner shows while models load. In chat:
+- Tab completes commands and paper keys.
+- Up/Down browse your earlier questions, which are saved in `data\chat_history.txt`.
+- The bottom bar shows the model, the memory turns and this session's API cost.
+
+When output is piped or redirected, everything falls back to plain text.
+
 ```
 python ask.py search "kernel two-sample tests"            # rank papers (free, local)
 python ask.py ask "How is the MMD estimator's variance controlled?"      # cited answer, Claude Haiku 5.5

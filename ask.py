@@ -28,6 +28,7 @@ import numpy as np
 from common import (CHUNK_EMB, CHUNK_IDS, ENV_FILE, JMLR_DIR, PAPER_EMB, PAPER_KEYS, QUERY_PREFIX,
                     RERANK_MODEL, RERANK_POOL, REWRITE, connect, load_encoder, load_reranker, utf8_console)
 from rewrite import bm25_text, rewrite as rewrite_query
+import ui
 
 MODELS = {"haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5"}
 STOP = set("""a an the of and or in on for to with by from is are was were be been being as at that this
@@ -76,7 +77,8 @@ class Index:
         self.reranker = load_reranker(rerank_model) if rerank_model else None
         if not CHUNK_IDS.exists():
             sys.exit("No embeddings yet - run: python embed.py")
-        print("Loading index...", end="\r", file=sys.stderr)
+        if not ui.fancy():                      # in a terminal, main() shows a spinner instead
+            print("Loading index...", end="\r", file=sys.stderr)
         self.chunk_ids = np.load(CHUNK_IDS)
         self.chunk_emb = np.load(CHUNK_EMB).astype(np.float32)
         self.paper_keys = np.load(PAPER_KEYS)
@@ -90,7 +92,8 @@ class Index:
         self.chunk_year = np.array([year.get(k, 0) for k in self.chunk_paper])
         self.paper_year = np.array([year.get(k, 0) for k in self.paper_keys])
         self.model, _ = load_encoder()
-        print(" " * 30, end="\r", file=sys.stderr)
+        if not ui.fancy():
+            print(" " * 30, end="\r", file=sys.stderr)
 
     def embed_query(self, q):
         return self.model.encode([QUERY_PREFIX + q], normalize_embeddings=True,
@@ -251,8 +254,7 @@ def call_claude(model_name, system, user_text, history=None):
         else:
             stream_ctx = client.messages.stream(**common, output_config={"effort": "medium"})
         with stream_ctx as stream:
-            for text in stream.text_stream:
-                print(text, end="", flush=True)
+            ui.stream_answer(stream.text_stream)
             msg = stream.get_final_message()
     except anthropic.AuthenticationError:
         sys.exit(f"\nAnthropic API key rejected - check ANTHROPIC_API_KEY in {ENV_FILE}.")
@@ -267,15 +269,15 @@ def call_claude(model_name, system, user_text, history=None):
         sys.exit("\nCould not reach the Anthropic API - check your internet connection.")
     except anthropic.APIStatusError as e:
         sys.exit(f"\nAnthropic API error {e.status_code}: {e.message}")
-    print()
     if msg.stop_reason == "refusal":
-        print("[The model declined to answer this request.]")
+        ui.note("[The model declined to answer this request.]", style="yellow")
     elif msg.stop_reason == "max_tokens":
-        print("[Answer was cut off at the length limit.]")
+        ui.note("[Answer was cut off at the length limit.]", style="yellow")
     u = msg.usage
     price = {"haiku": (0.10, 0.50), "opus": (4.0, 20.0)}[model_name]
     cost = (u.input_tokens * price[0] + u.output_tokens * price[1]) / 1e6
-    print(f"\n({msg.model}: {u.input_tokens} in / {u.output_tokens} out tokens, ~${cost:.4f})")
+    ui.add_cost(cost)
+    ui.note(f"\n({msg.model}: {u.input_tokens} in / {u.output_tokens} out tokens, ~${cost:.4f})")
     return msg
 
 
@@ -382,7 +384,8 @@ def chat_ask(ix, a, conv):
         if err:
             print(f"(Could not condense the follow-up - {err}; searching for the question as typed.)")
         else:
-            print(f"Searching for: {query}  (condensed by {MODELS['haiku']}, ~${cost:.4f})")
+            ui.add_cost(cost)
+            ui.note(f"Searching for: {query}  (condensed by {MODELS['haiku']}, ~${cost:.4f})", style="cyan")
     hits = ix.passages(query, k=a.k or 12, since=a.since, until=a.until)
     if not hits:
         print("No matching passages found.")
@@ -421,14 +424,26 @@ CHAT_HELP = """JMLR assistant with conversation memory. Type a question to get a
   /help   /quit"""
 
 
+CHAT_COMMANDS = ["/new", "/reset", "/opus", "/haiku", "/search", "/reading", "/compare", "/similar", "/open",
+                 "/topics", "/help", "/quit"]
+
+
 def cmd_chat(ix, a):
     from conversation import Conversation
-    print(CHAT_HELP)
-    model = a.model
+    ui.panel(CHAT_HELP, "JMLR assistant")
+    state = {"model": a.model}
     conv = Conversation()
+
+    def toolbar():
+        n = len(conv)
+        return (f"{MODELS[state['model']]}  |  memory: {n} turn{'' if n == 1 else 's'}  |  "
+                f"session ~${ui.SESSION['cost']:.4f}  |  Tab completes, Up = history, /help")
+
+    prompt = ui.ChatPrompt(CHAT_COMMANDS, sorted(ix.papers), toolbar)
     while True:
+        model = state["model"]
         try:
-            line = input(f"\n[{model} | memory: {len(conv)} turn{'' if len(conv) == 1 else 's'}] > ").strip()
+            line = prompt.ask(f"[{model} | memory: {len(conv)} turn{'' if len(conv) == 1 else 's'}]").strip()
         except (EOFError, KeyboardInterrupt):
             break
         if not line:
@@ -436,7 +451,7 @@ def cmd_chat(ix, a):
         if line in ("/quit", "/exit", "/q"):
             break
         if line in ("/opus", "/haiku"):
-            model = line[1:]
+            state["model"] = model = line[1:]
             print(f"Model set to {MODELS[model]}")
             continue
         if line in ("/new", "/reset"):
@@ -444,7 +459,7 @@ def cmd_chat(ix, a):
             print("Started a new conversation (memory cleared).")
             continue
         if line in ("/help", "/?"):
-            print(CHAT_HELP)
+            ui.panel(CHAT_HELP, "JMLR assistant")
             continue
         cmd, _, rest = line.partition(" ") if line.startswith("/") else ("/ask", "", line)
         sub = argparse.Namespace(query=rest.strip(), model=model, k=a.k, since=a.since, until=a.until, papers=None)
@@ -473,8 +488,9 @@ def cmd_chat(ix, a):
 def main():
     utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["search", "ask", "reading", "compare", "similar", "open", "cite",
-                                        "topics", "chat"])
+    ap.add_argument("command", nargs="?", default="chat",
+                    choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "topics", "chat"],
+                    help="default: chat")
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("more_keys", nargs="*", help=argparse.SUPPRESS)   # cite: further paper keys
     ap.add_argument("--out", help="cite: write a UTF-8 .bib file instead of printing")
@@ -496,13 +512,15 @@ def main():
     if a.command == "topics":
         import topics
         if a.for_query:   # needs retrieval, but not the reranker
-            return topics.for_query(Index(rerank_model=None, rewrite="off" if a.no_rewrite else REWRITE),
-                                    a.for_query)
+            with ui.status("Loading the index..."):
+                ix = Index(rerank_model=None, rewrite="off" if a.no_rewrite else REWRITE)
+            return topics.for_query(ix, a.for_query)
         return topics.show(a.query, rising=a.rising)
     if a.command == "cite":
         import cite
         return cite.run([a.query] + a.more_keys, a.out)
-    ix = Index(rewrite="off") if a.no_rewrite else Index()
+    with ui.status("Loading the index, search model and reranker (about 30 s)..."):
+        ix = Index(rewrite="off") if a.no_rewrite else Index()
     {"search": cmd_search, "ask": cmd_ask, "reading": cmd_reading, "compare": cmd_compare,
      "similar": cmd_similar, "chat": cmd_chat}[a.command](ix, a)
 

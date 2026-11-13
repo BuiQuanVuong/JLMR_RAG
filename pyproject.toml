@@ -1,0 +1,18 @@
+# Makes `jmlr-rag` a command (runs ask.py's main; with no arguments it opens chat).
+# Install into the project's own environment, editable, without touching its dependencies:
+#   .venv\Scripts\python -m pip install --no-deps -e .
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jmlr-rag"
+version = "0.1.0"
+description = "Local search and Claude-powered Q&A over the JMLR paper archive"
+requires-python = ">=3.11"
+
+[project.scripts]
+jmlr-rag = "ask:main"
+
+[tool.setuptools]
+py-modules = ["ask", "common", "compare", "conversation", "cite", "rewrite", "topics", "ui"]
