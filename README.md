@@ -2,7 +2,7 @@
 
 A local search engine plus Claude-powered Q&A over the 4,138 JMLR papers in `..\JMLR`.
 
-Search runs locally and costs nothing. Only `ask`, `reading` and `chat` questions call the Claude API.
+Search runs locally and costs nothing. Only `ask`, `reading`, `compare` and `chat` questions call the Claude API.
 
 ## Setup (one time)
 
@@ -32,7 +32,7 @@ python ask.py compare "How do these tests choose the kernel bandwidth?" -k 4    
 python ask.py compare "..." --papers v13/gretton12a v24/21-1289                  # compare chosen papers
 python ask.py similar v20/13-124                          # papers like this one (free)
 python ask.py open v20/13-124                             # open the PDF
-python ask.py chat                                        # interactive; /opus and /haiku switch models
+python ask.py chat                                        # interactive, remembers the conversation (see below)
 ```
 
 Options: `--since YEAR`, `--until YEAR`, and `-k N` for the number of passages or papers.
@@ -82,6 +82,25 @@ the reranker input (slightly worse). Topic search stays at 100%. Standard and to
 
 Citations look like `[P2.3]` (paper 2, passage 3), and each one is listed with its page and section. A
 4-paper comparison costs about $0.006 with Haiku, or about $0.06–0.10 with `--opus` for the synthesis.
+
+## Chat with memory (`conversation.py`)
+
+`python ask.py chat` remembers the conversation, so follow-ups like "Which of those papers handles
+functional data?" or "How does source 2 from your first answer pick its kernel?" work:
+
+1. **Query condensing:** from the second question on, Claude Haiku 5.5 rewrites the follow-up into a
+   standalone search query, using the last 3 turns (questions, answers and source titles). The query is
+   printed as `Searching for: ...` and costs about $0.0003. If that call fails, the question is searched
+   as typed.
+2. **Answering with context:** the last 4 turns (up to about 6k tokens) go to Claude as real
+   user/assistant messages. Older turns carry only their source *titles*, not the passages, and each turn
+   is labelled "Turn N". Citations [n] always refer to the current turn's source list, and Claude names a
+   paper from an earlier turn instead of reusing an old number.
+
+`/new` (or `/reset`) starts a fresh conversation. `/opus` and `/haiku` switch models and keep the memory.
+The prompt shows how many turns are remembered. `/search`, `/reading`, `/compare`, `/similar` and `/open`
+are one-shot: they neither use nor add to the memory. `python ask.py ask` has no memory. A follow-up costs
+a little more than a fresh question, because the history is sent again (Haiku: about $0.002–0.003).
 
 ## Adding new papers later
 
