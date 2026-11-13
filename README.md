@@ -25,8 +25,25 @@ cd D:\Academic_Papers\jmlr_rag
 
 ## Usage
 
-**One-word start:** `jmlr-rag` (no arguments) opens chat, and `jmlr-rag search "..."`, `jmlr-rag topics` and
-so on work like `python ask.py ...`. It's installed in the project environment with
+**Full-screen app:** `jmlr-rag` with no arguments, in a terminal, opens a Textual app (`tui.py`) with four
+tabs:
+- **F1 Chat:** conversation with memory and streaming Markdown answers. A sources pane lists the cited
+  passages, and Enter on one opens its PDF. `/compare <question>` and `/reading <topic>` work here too.
+- **F2 Search:** ranked papers. The highlighted paper's abstract and best-matching passage are shown, and
+  Enter opens the PDF.
+- **F3 Topics:** the topic map as a tree (areas → subtopics → papers), with trends, top authors and
+  abstracts.
+- **F4 Sessions:** saved conversations. Enter resumes one.
+
+Ctrl+N starts a new conversation, Ctrl+O switches between Haiku and Opus, and Ctrl+Q quits.
+`jmlr-rag chat` keeps the line-based chat. `python tests\test_tui.py` checks the app headlessly, with no GPU
+and no API calls.
+
+**Saved sessions:** every conversation is saved after each answer in `data\sessions\`. In the line chat,
+`/sessions` lists them, `/resume [N]` continues one, and `jmlr-rag chat --resume` reopens the most recent.
+`/new` starts a fresh conversation without deleting the old one.
+
+**One-word start:** `jmlr-rag search "..."`, `jmlr-rag topics` and so on work like `python ask.py ...`. It's installed in the project environment with
 `.venv\Scripts\python -m pip install --no-deps -e .`. To use it from any terminal, copy `bin\jmlr-rag.cmd`
 into a folder on your PATH, such as `%LOCALAPPDATA%\Microsoft\WindowsApps`.
 

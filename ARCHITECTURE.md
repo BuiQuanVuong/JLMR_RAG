@@ -66,6 +66,9 @@ This file explains how the parts fit together and why they are built the way the
 | `conversation.py` | Chat memory: turn history, follow-up condensation, history budget. |
 | `cite.py` | BibTeX export. |
 | `topics.py` | Topic map: granularity sweep, two-level clustering, naming, storage, map image, browse views. |
+| `tui.py` | Full-screen Textual app (Chat / Search / Topics / Sessions). Retrieval and Claude calls run in worker threads and stream into Markdown widgets. |
+| `ui.py` | Terminal rendering for the line interface: Rich Markdown streaming, spinner, prompt_toolkit input. |
+| `tests/test_tui.py` | Headless app test with a fake index and a fake Claude stream. |
 | `make_eval.py` / `eval.py` | Builds the 140-question evaluation set; scores retrieval. |
 | `embed_test.py` | Compares candidate embedding models on a subset index. |
 
@@ -170,7 +173,13 @@ token use and approximate cost.
      newest kept first.
   3. Earlier turns carry only their source titles, labelled "Turn N", so [n] numbers from different turns
      don't get mixed up.
-  4. A turn is recorded only after a non-empty, non-refused answer. `/new` clears the history.
+  4. A turn is recorded only after a non-empty, non-refused answer.
+  5. Every recorded turn saves the conversation to `data/sessions/<timestamp>.json` (atomic write).
+     `/sessions`, `/resume [N]`, `--resume` and the app's Sessions tab reload it, history included.
+
+- **Front ends:** `ask.prepare_chat_turn` / `stream_claude(render=...)` / `record_chat_turn` are the shared
+  core. `stream_claude` raises `ClaudeError` instead of exiting. The line chat renders with Rich, and the
+  Textual app renders into Markdown widgets from a worker thread, throttled to about 7 updates per second.
 
 - **Topic map** (`topics.py`): paper vectors combine the title+abstract embedding with the mean of the
   paper's passage embeddings. A sweep picks the granularity, scoring each setting on adjusted mutual

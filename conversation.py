@@ -13,8 +13,13 @@ use it:
 Retrieval itself (Index.passages) is untouched: it simply receives the condensed query.
 """
 import json
-from dataclasses import dataclass, field
+import os
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
 
+from common import DATA_DIR
+
+SESSIONS_DIR = DATA_DIR / "sessions"   # one JSON file per conversation, saved after every turn
 CONDENSE_MODEL = "claude-haiku-5-5"
 HISTORY_TURNS = 4          # at most this many earlier turns go into the answer call ...
 HISTORY_CHARS = 24000      # ... and at most ~this many characters of them (~6k tokens)
@@ -71,15 +76,46 @@ class Turn:
 @dataclass
 class Conversation:
     turns: list = field(default_factory=list)
+    session_id: str = ""            # set on the first saved turn, e.g. "20261114-0215-3f"
+    title: str = ""                 # the first question, shortened
+    created: str = ""
 
     def reset(self):
+        """Start a fresh conversation (the previous one stays saved on disk)."""
         self.turns.clear()
+        self.session_id = self.title = self.created = ""
 
     def add(self, question, query, answer, sources):
         self.turns.append(Turn(question, query, answer, list(sources)))
+        self.save()
 
     def __len__(self):
         return len(self.turns)
+
+    # ------------------------------------------------------------ saved sessions
+
+    def save(self):
+        if not self.turns:
+            return
+        now = datetime.now()
+        if not self.session_id:
+            self.session_id = now.strftime("%Y%m%d-%H%M%S")
+            self.created = now.isoformat(timespec="seconds")
+            self.title = clip(self.turns[0].question, 80)
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        path = SESSIONS_DIR / f"{self.session_id}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"id": self.session_id, "title": self.title, "created": self.created,
+                                   "updated": now.isoformat(timespec="seconds"),
+                                   "turns": [asdict(t) for t in self.turns]}, indent=1, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, path)
+
+    @classmethod
+    def load(cls, session_id):
+        data = json.loads((SESSIONS_DIR / f"{session_id}.json").read_text(encoding="utf-8"))
+        return cls(turns=[Turn(**t) for t in data["turns"]], session_id=data["id"], title=data["title"],
+                   created=data["created"])
 
     # ------------------------------------------------------------ answer-call history
 
@@ -140,6 +176,30 @@ class Conversation:
             return (query or question), cost, None
         except Exception as e:        # no key, network, bad JSON...: search with the raw question
             return question, 0.0, f"{type(e).__name__}: {str(e)[:120]}"
+
+
+def list_sessions(limit=30):
+    """Saved conversations, most recently updated first: dicts with id, title, updated, turns."""
+    out = []
+    for f in SESSIONS_DIR.glob("*.json") if SESSIONS_DIR.exists() else []:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            out.append({"id": d["id"], "title": d["title"], "updated": d["updated"], "turns": len(d["turns"])})
+        except Exception:
+            continue
+    return sorted(out, key=lambda s: s["updated"], reverse=True)[:limit]
+
+
+def resolve_session(ref, sessions=None):
+    """'last', a list number (1 = most recent) or an id -> session id, or None."""
+    sessions = sessions if sessions is not None else list_sessions(limit=1000)
+    if not sessions:
+        return None
+    if ref in ("", "last"):
+        return sessions[0]["id"]
+    if ref.isdigit() and 1 <= int(ref) <= len(sessions):
+        return sessions[int(ref) - 1]["id"]
+    return next((s["id"] for s in sessions if s["id"] == ref), None)
 
 
 def clip(s, n):

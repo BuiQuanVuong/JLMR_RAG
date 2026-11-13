@@ -233,15 +233,23 @@ class Index:
 
 # ---------------------------------------------------------------- Claude
 
-def call_claude(model_name, system, user_text, history=None):
-    """Stream Claude's answer to the terminal. Returns the final message.
-    history: optional earlier messages (alternating user/assistant, starting with user) sent before
-    user_text, for multi-turn chat."""
+class ClaudeError(Exception):
+    """A Claude call failed; the message is meant for the user."""
+
+
+PRICES = {"haiku": (0.10, 0.50), "opus": (4.0, 20.0)}
+
+
+def stream_claude(model_name, system, user_text, history=None, render=None):
+    """Core Claude call used by the terminal and the full-screen app. render(text_iterator) consumes the
+    streamed text (default: Markdown in the terminal). Returns (final message, cost in USD); raises
+    ClaudeError with a user-facing message on failure."""
+    import anthropic
     try:
-        import anthropic
         client = anthropic.Anthropic()
     except Exception as e:
-        sys.exit(f"Could not create Anthropic client ({e}). Set ANTHROPIC_API_KEY first - see README.md.")
+        raise ClaudeError(f"Could not create Anthropic client ({e}). Set ANTHROPIC_API_KEY - see README.md.")
+    render = render or ui.stream_answer
     model = MODELS[model_name]
     common = dict(model=model, max_tokens=16000, system=system,
                   messages=[*(history or []), {"role": "user", "content": user_text}])
@@ -254,29 +262,41 @@ def call_claude(model_name, system, user_text, history=None):
         else:
             stream_ctx = client.messages.stream(**common, output_config={"effort": "medium"})
         with stream_ctx as stream:
-            ui.stream_answer(stream.text_stream)
+            render(stream.text_stream)
             msg = stream.get_final_message()
     except anthropic.AuthenticationError:
-        sys.exit(f"\nAnthropic API key rejected - check ANTHROPIC_API_KEY in {ENV_FILE}.")
+        raise ClaudeError(f"Anthropic API key rejected - check ANTHROPIC_API_KEY in {ENV_FILE}.")
     except TypeError as e:
         if "authentication" not in str(e).lower():
             raise
-        sys.exit(f"No Anthropic API key found. Put it in {ENV_FILE} as ANTHROPIC_API_KEY=sk-ant-... "
-                 "('search', 'similar' and 'open' work without one).")
+        raise ClaudeError(f"No Anthropic API key found. Put it in {ENV_FILE} as ANTHROPIC_API_KEY=sk-ant-... "
+                          "('search', 'similar' and 'open' work without one).")
     except anthropic.RateLimitError:
-        sys.exit("\nRate limited by the Anthropic API - wait a minute and retry.")
+        raise ClaudeError("Rate limited by the Anthropic API - wait a minute and retry.")
     except anthropic.APIConnectionError:
-        sys.exit("\nCould not reach the Anthropic API - check your internet connection.")
+        raise ClaudeError("Could not reach the Anthropic API - check your internet connection.")
     except anthropic.APIStatusError as e:
-        sys.exit(f"\nAnthropic API error {e.status_code}: {e.message}")
+        raise ClaudeError(f"Anthropic API error {e.status_code}: {e.message}")
+    u = msg.usage
+    price = PRICES[model_name]
+    cost = (u.input_tokens * price[0] + u.output_tokens * price[1]) / 1e6
+    ui.add_cost(cost)
+    return msg, cost
+
+
+def call_claude(model_name, system, user_text, history=None):
+    """Stream Claude's answer to the terminal. Returns the final message.
+    history: optional earlier messages (alternating user/assistant, starting with user) sent before
+    user_text, for multi-turn chat."""
+    try:
+        msg, cost = stream_claude(model_name, system, user_text, history)
+    except ClaudeError as e:
+        sys.exit(f"\n{e}")
     if msg.stop_reason == "refusal":
         ui.note("[The model declined to answer this request.]", style="yellow")
     elif msg.stop_reason == "max_tokens":
         ui.note("[Answer was cut off at the length limit.]", style="yellow")
     u = msg.usage
-    price = {"haiku": (0.10, 0.50), "opus": (4.0, 20.0)}[model_name]
-    cost = (u.input_tokens * price[0] + u.output_tokens * price[1]) / 1e6
-    ui.add_cost(cost)
     ui.note(f"\n({msg.model}: {u.input_tokens} in / {u.output_tokens} out tokens, ~${cost:.4f})")
     return msg
 
@@ -308,10 +328,8 @@ def cmd_search(ix, a):
         print()
 
 
-def cmd_ask(ix, a):
-    hits = ix.passages(a.query, k=a.k or 12, since=a.since, until=a.until)
-    if not hits:
-        sys.exit("No matching passages found.")
+def source_blocks(ix, hits):
+    """The retrieved passages as numbered <source> blocks for the prompt."""
     blocks = []
     for i, h in enumerate(hits, 1):
         p = ix.papers[h["paper_key"]]
@@ -319,7 +337,18 @@ def cmd_ask(ix, a):
         section = f' section="{h["section"]}"' if h.get("section") else ""
         blocks.append(f'<source id="{i}" title="{p["title"]}" authors="{p["authors"]}" year="{p["year"]}" '
                       f'pages="{pages}"{section}>\n{h["text"]}\n</source>')
-    user = "<sources>\n" + "\n".join(blocks) + f"\n</sources>\n\nQuestion: {a.query}"
+    return "<sources>\n" + "\n".join(blocks) + "\n</sources>"
+
+
+def answer_text(msg):
+    return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+
+
+def cmd_ask(ix, a):
+    hits = ix.passages(a.query, k=a.k or 12, since=a.since, until=a.until)
+    if not hits:
+        sys.exit("No matching passages found.")
+    user = source_blocks(ix, hits) + f"\n\nQuestion: {a.query}"
     print(f"Retrieved {len(hits)} passages from {len({h['paper_key'] for h in hits})} papers. "
           f"Asking {MODELS[a.model]}...\n")
     call_claude(a.model, SYSTEM, user)
@@ -374,41 +403,48 @@ def source_label(ix, h):
     return f"{p['title']} ({first}, {p['year']}), p.{h['page_start']}{sec}  [{p['key']}]"
 
 
-def chat_ask(ix, a, conv):
-    """One conversational turn: condense a follow-up into a standalone query, retrieve, answer with the
-    earlier turns as context, and record the turn in conv."""
+def prepare_chat_turn(ix, conv, question, k=None, since=None, until=None):
+    """Everything for one conversational turn except the answer call (shared by the line chat and the
+    full-screen app): condense a follow-up into a standalone query, retrieve, build the prompt.
+    Returns a dict: query, condense_cost, condense_error, hits, user, history, system."""
     from conversation import CHAT_SYSTEM_ADDENDUM
-    query = a.query
-    if len(conv):
-        query, cost, err = conv.condense(a.query)
-        if err:
-            print(f"(Could not condense the follow-up - {err}; searching for the question as typed.)")
-        else:
-            ui.add_cost(cost)
-            ui.note(f"Searching for: {query}  (condensed by {MODELS['haiku']}, ~${cost:.4f})", style="cyan")
-    hits = ix.passages(query, k=a.k or 12, since=a.since, until=a.until)
+    query, cost, err = conv.condense(question) if len(conv) else (question, 0.0, None)
+    hits = ix.passages(query, k=k or 12, since=since, until=until)
+    searched = f"\n(These sources were retrieved with the search query: {query})" if query != question else ""
+    user = (f"{conv.current_label()}. New sources for this turn (cite these as [n]):\n"
+            + source_blocks(ix, hits) + f"{searched}\n\nQuestion: {question}")
+    return dict(query=query, condense_cost=cost, condense_error=err, hits=hits, user=user,
+                history=conv.history_messages(), system=SYSTEM + CHAT_SYSTEM_ADDENDUM)
+
+
+def record_chat_turn(ix, conv, question, turn, msg):
+    """Save the turn to the conversation (and its session file) unless the answer is empty or refused."""
+    answer = answer_text(msg)
+    labels = [source_label(ix, h) for h in turn["hits"]]
+    if answer and msg.stop_reason != "refusal":
+        conv.add(question, turn["query"], answer, labels)
+    return labels
+
+
+def chat_ask(ix, a, conv):
+    """One conversational turn in the line chat."""
+    turn = prepare_chat_turn(ix, conv, a.query, a.k, a.since, a.until)
+    ui.add_cost(turn["condense_cost"])
+    if turn["condense_error"]:
+        print(f"(Could not condense the follow-up - {turn['condense_error']}; searching for the question as typed.)")
+    elif len(conv):
+        ui.note(f"Searching for: {turn['query']}  (condensed by {MODELS['haiku']}, "
+                f"~${turn['condense_cost']:.4f})", style="cyan")
+    hits = turn["hits"]
     if not hits:
         print("No matching passages found.")
         return
-    blocks = []
-    for i, h in enumerate(hits, 1):
-        p = ix.papers[h["paper_key"]]
-        pages = f"{h['page_start']}" + (f"-{h['page_end']}" if h["page_end"] != h["page_start"] else "")
-        section = f' section="{h["section"]}"' if h.get("section") else ""
-        blocks.append(f'<source id="{i}" title="{p["title"]}" authors="{p["authors"]}" year="{p["year"]}" '
-                      f'pages="{pages}"{section}>\n{h["text"]}\n</source>')
-    searched = f"\n(These sources were retrieved with the search query: {query})" if query != a.query else ""
-    user = (f"{conv.current_label()}. New sources for this turn (cite these as [n]):\n<sources>\n"
-            + "\n".join(blocks) + f"\n</sources>{searched}\n\nQuestion: {a.query}")
-    history = conv.history_messages()
+    history = turn["history"]
     mem = f", with {len(history) // 2} earlier turn(s) as context" if history else ""
     print(f"Retrieved {len(hits)} passages from {len({h['paper_key'] for h in hits})} papers. "
           f"Asking {MODELS[a.model]}{mem}...\n")
-    msg = call_claude(a.model, SYSTEM + CHAT_SYSTEM_ADDENDUM, user, history=history)
-    answer = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
-    labels = [source_label(ix, h) for h in hits]
-    if answer and msg.stop_reason != "refusal":
-        conv.add(a.query, query, answer, labels)
+    msg = call_claude(a.model, turn["system"], turn["user"], history=history)
+    labels = record_chat_turn(ix, conv, a.query, turn, msg)
     print("\nSources:")
     for i, label in enumerate(labels, 1):
         print(f" [{i}] {label}")
@@ -418,21 +454,48 @@ def chat_ask(ix, a, conv):
 CHAT_HELP = """JMLR assistant with conversation memory. Type a question to get a cited answer; follow-ups
 ("which of those handles noise?", "how does [2] do it?") build on the earlier turns.
   /new (or /reset)   start a fresh conversation      /opus  /haiku   switch model (memory is kept)
+  /sessions   list saved conversations    /resume [N]   continue one (default: the most recent)
+              conversations are saved automatically after every answer (data/sessions/)
   /search <query>   /reading <topic>   /compare <question>   /similar <key>   /open <key>
   /topics [a | a.b | rising | for <question>]   browse the topic map
                      one-shot commands: they neither use nor add to the conversation memory
   /help   /quit"""
 
 
-CHAT_COMMANDS = ["/new", "/reset", "/opus", "/haiku", "/search", "/reading", "/compare", "/similar", "/open",
-                 "/topics", "/help", "/quit"]
+CHAT_COMMANDS = ["/new", "/reset", "/sessions", "/resume", "/opus", "/haiku", "/search", "/reading", "/compare",
+                 "/similar", "/open", "/topics", "/help", "/quit"]
+
+
+def print_sessions():
+    from conversation import list_sessions
+    sessions = list_sessions()
+    if not sessions:
+        print("No saved conversations yet.")
+        return
+    print("Saved conversations (most recent first):")
+    for i, s in enumerate(sessions, 1):
+        print(f" {i:>2}. {s['updated'][:16].replace('T', ' ')}  {s['turns']:>2} turns  {s['title']}")
+    print("Continue one with:  /resume <number>")
+
+
+def resume_session(ref):
+    """Load a saved conversation by list number, id or 'last'; prints its last exchange. None if not found."""
+    from conversation import Conversation, resolve_session
+    sid = resolve_session(ref)
+    if not sid:
+        print("No such saved conversation (see /sessions).")
+        return None
+    conv = Conversation.load(sid)
+    last = conv.turns[-1]
+    print(f"Resumed \"{conv.title}\" ({len(conv)} turns). Last question: {last.question}")
+    return conv
 
 
 def cmd_chat(ix, a):
     from conversation import Conversation
     ui.panel(CHAT_HELP, "JMLR assistant")
     state = {"model": a.model}
-    conv = Conversation()
+    conv = (resume_session(a.resume) if getattr(a, "resume", None) else None) or Conversation()
 
     def toolbar():
         n = len(conv)
@@ -455,8 +518,14 @@ def cmd_chat(ix, a):
             print(f"Model set to {MODELS[model]}")
             continue
         if line in ("/new", "/reset"):
-            conv.reset()
-            print("Started a new conversation (memory cleared).")
+            conv = Conversation()
+            print("Started a new conversation (the previous one stays saved; /sessions lists them).")
+            continue
+        if line == "/sessions":
+            print_sessions()
+            continue
+        if line == "/resume" or line.startswith("/resume "):
+            conv = resume_session(line[len("/resume"):].strip() or "last") or conv
             continue
         if line in ("/help", "/?"):
             ui.panel(CHAT_HELP, "JMLR assistant")
@@ -488,9 +557,10 @@ def cmd_chat(ix, a):
 def main():
     utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", nargs="?", default="chat",
-                    choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "topics", "chat"],
-                    help="default: chat")
+    ap.add_argument("command", nargs="?", default=None,
+                    choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "topics", "chat",
+                             "app"],
+                    help="default: the full-screen app in a terminal, otherwise chat")
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("more_keys", nargs="*", help=argparse.SUPPRESS)   # cite: further paper keys
     ap.add_argument("--out", help="cite: write a UTF-8 .bib file instead of printing")
@@ -502,9 +572,19 @@ def main():
     ap.add_argument("--until", type=int, help="only papers up to this year")
     ap.add_argument("--no-rewrite", action="store_true",
                     help="don't rewrite the question into ML terminology with Claude before searching")
+    ap.add_argument("--resume", nargs="?", const="last", metavar="N",
+                    help="chat: continue a saved conversation (default: the most recent)")
     ap.add_argument("--rising", action="store_true", help="topics: subtopics that grew or shrank most")
     ap.add_argument("--for", dest="for_query", metavar="QUESTION", help="topics: which subtopics a question falls into")
     a = ap.parse_args()
+    if a.command is None:
+        a.command = "app" if (sys.stdin.isatty() and sys.stdout.isatty()) else "chat"
+    if a.command == "app":
+        try:
+            import tui
+        except ImportError as e:
+            sys.exit(f"The full-screen app needs Textual ({e}); run 'jmlr-rag chat' instead.")
+        return tui.run(a)
     if a.command not in ("chat", "topics") and not a.query:
         ap.error(f"'{a.command}' needs a query")
     if a.command == "open":
