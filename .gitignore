@@ -12,3 +12,7 @@ eval/results_*.csv
 
 # Claude Code agent worktrees
 .claude/
+
+# cached Claude query rewrites (rewrite.py); refill for the eval set with: python rewrite.py --eval
+eval/rewrite_cache.json
+eval/rewrite_cache.tmp

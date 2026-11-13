@@ -12,6 +12,7 @@
   python ask.py chat                                        interactive mode with conversation memory
 
 Filters for search/ask/reading: --since YEAR, --until YEAR, -k N (number of passages/papers).
+--no-rewrite skips the Claude Haiku query rewrite (rewrite.py) and searches with your words only.
 """
 import argparse
 import os
@@ -24,7 +25,8 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")   # the embedding model is cached b
 import numpy as np
 
 from common import (CHUNK_EMB, CHUNK_IDS, ENV_FILE, JMLR_DIR, PAPER_EMB, PAPER_KEYS, QUERY_PREFIX,
-                    RERANK_MODEL, RERANK_POOL, connect, load_encoder, load_reranker, utf8_console)
+                    RERANK_MODEL, RERANK_POOL, REWRITE, connect, load_encoder, load_reranker, utf8_console)
+from rewrite import bm25_text, rewrite as rewrite_query
 
 MODELS = {"haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5"}
 STOP = set("""a an the of and or in on for to with by from is are was were be been being as at that this
@@ -54,9 +56,19 @@ if important sub-areas are missing from the candidates, say so briefly."""
 
 # ---------------------------------------------------------------- retrieval
 
+REWRITE_MODES = ("off", "bm25", "both", "fuse", "hyde", "multi")
+
+
 class Index:
-    def __init__(self, rerank_model=RERANK_MODEL, rerank_pool=RERANK_POOL, section_in_rerank=False):
+    def __init__(self, rerank_model=RERANK_MODEL, rerank_pool=RERANK_POOL, section_in_rerank=False,
+                 rewrite=REWRITE, rewrite_search=False):
         # section_in_rerank=True measured slightly worse (hard passage@12 60% vs 62%), so it is off
+        # rewrite: how the Claude Haiku query rewrite (rewrite.py) is used by passages(), see REWRITE_MODES;
+        # rewrite_search: also use it in rank_papers() (search / reading)
+        if rewrite not in REWRITE_MODES:
+            raise ValueError(f"rewrite must be one of {REWRITE_MODES}")
+        self.rewrite = rewrite
+        self.rewrite_search = rewrite_search
         self.con = connect()
         self.rerank_pool = rerank_pool
         self.section_in_rerank = section_in_rerank
@@ -83,6 +95,29 @@ class Index:
         return self.model.encode([QUERY_PREFIX + q], normalize_embeddings=True,
                                  convert_to_numpy=True)[0].astype(np.float32)
 
+    def query_variants(self, q, mode=None):
+        """(dense, sparse) query lists for retrieval. dense items are (text, is_query): a hypothetical
+        passage (HyDE) is embedded like a document, without the query prefix. Each item yields one ranked
+        list; all lists are fused with RRF. Falls back to [q] / [q] when no rewrite is available."""
+        mode = self.rewrite if mode is None else mode
+        dense, sparse = [(q, True)], [q]
+        rw = None if mode == "off" else rewrite_query(q)
+        if not rw:
+            return dense, sparse
+        kw, rq = bm25_text(rw), rw["rewrite"]
+        if mode == "bm25":
+            sparse = [kw]
+        elif mode == "both":
+            dense, sparse = [(rq, True)], [kw]
+        elif mode == "fuse":
+            dense, sparse = [(q, True), (rq, True)], [q, kw]
+        elif mode == "hyde":
+            dense, sparse = [(q, True), (rw["passage"], False)], [q, kw]
+        elif mode == "multi":
+            dense = [(q, True), (rq, True), *((a, True) for a in rw["alternatives"]), (rw["passage"], False)]
+            sparse = [q, kw, *rw["alternatives"]]
+        return dense, sparse
+
     @staticmethod
     def fts_query(q):
         terms = [t for t in re.findall(r"[A-Za-z0-9]+", q.lower()) if t not in STOP and len(t) > 1]
@@ -92,33 +127,39 @@ class Index:
     def year_ok(y, since, until):
         return (since is None or y >= since) and (until is None or y <= until)
 
-    def passages(self, q, k=12, per_paper=3, since=None, until=None, pool=200, mode="hybrid", rerank=True):
+    def passages(self, q, k=12, per_paper=3, since=None, until=None, pool=200, mode="hybrid", rerank=True,
+                 rewrite=None):
         """Hybrid retrieval: dense (bge) + BM25 (SQLite FTS5), fused with reciprocal rank fusion, then
-        (optionally) the top RERANK_POOL candidates re-scored by a cross-encoder.
-        mode = 'hybrid' | 'dense' | 'sparse' (the single-signal modes exist for evaluation)."""
-        dense = []
+        (optionally) the top RERANK_POOL candidates re-scored by a cross-encoder against the ORIGINAL q.
+        rewrite = None (use the Index setting) or one of REWRITE_MODES: which retrieval lists use the
+        Claude rewrite of q. mode = 'hybrid' | 'dense' | 'sparse' (single-signal modes, for evaluation)."""
+        dense_q, sparse_q = self.query_variants(q, rewrite)
+        lists = []
         if mode in ("hybrid", "dense"):
-            qv = self.embed_query(q)
-            scores = self.chunk_emb @ qv
-            mask = np.ones(len(scores), bool)
+            vecs = self.model.encode([(QUERY_PREFIX + t) if is_q else t for t, is_q in dense_q],
+                                     normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
+            mask = np.ones(len(self.chunk_ids), bool)
             if since:
                 mask &= self.chunk_year >= since
             if until:
                 mask &= self.chunk_year <= until
-            scores[~mask] = -1
-            dense = self.chunk_ids[np.argsort(-scores)[:pool]].tolist()
+            for qv in vecs:
+                scores = self.chunk_emb @ qv
+                scores[~mask] = -1
+                lists.append(self.chunk_ids[np.argsort(-scores)[:pool]].tolist())
 
-        sparse = []
-        fq = self.fts_query(q) if mode in ("hybrid", "sparse") else ""
-        if fq:
+        for text in (sparse_q if mode in ("hybrid", "sparse") else []):
+            fq = self.fts_query(text)
+            if not fq:
+                continue
             rows = self.con.execute("""SELECT c.id, p.year FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
                                        JOIN papers p ON p.key = c.paper_key
                                        WHERE chunks_fts MATCH ? AND c.is_ref = 0
                                        ORDER BY bm25(chunks_fts) LIMIT ?""", (fq, pool * 3)).fetchall()
-            sparse = [r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:pool]
+            lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:pool])
 
         fused = {}
-        for ranked in (dense, sparse):
+        for ranked in lists:
             for rank, cid in enumerate(ranked):
                 fused[cid] = fused.get(cid, 0) + 1 / (60 + rank)
         ranked = sorted(fused, key=fused.get, reverse=True)
@@ -149,19 +190,26 @@ class Index:
         return out
 
     def rank_papers(self, q, k=10, since=None, until=None):
-        """Paper ranking: fuse title/abstract similarity, abstract keyword match and best passage hits."""
-        qv = self.embed_query(q)
-        ps = self.paper_emb @ qv
-        order = [self.paper_keys[i] for i in np.argsort(-ps)
-                 if self.year_ok(self.paper_year[i], since, until)][:200]
-        lists = [order]
-        fq = self.fts_query(q)
-        if fq:
+        """Paper ranking: fuse title/abstract similarity, abstract keyword match and best passage hits.
+        With rewrite_search, the Claude rewrite adds its own title/abstract lists and passage lists."""
+        mode = self.rewrite if self.rewrite_search else "off"
+        dense_q, sparse_q = self.query_variants(q, mode)
+        lists = []
+        vecs = self.model.encode([(QUERY_PREFIX + t) if is_q else t for t, is_q in dense_q],
+                                 normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
+        for qv in vecs:
+            ps = self.paper_emb @ qv
+            lists.append([self.paper_keys[i] for i in np.argsort(-ps)
+                          if self.year_ok(self.paper_year[i], since, until)][:200])
+        for text in sparse_q:
+            fq = self.fts_query(text)
+            if not fq:
+                continue
             rows = self.con.execute("""SELECT p.key, p.year FROM papers_fts JOIN papers p ON p.rowid = papers_fts.rowid
                                        WHERE papers_fts MATCH ? ORDER BY bm25(papers_fts, 5.0, 1.0, 2.0)
                                        LIMIT 300""", (fq,)).fetchall()
             lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:200])
-        hits = self.passages(q, k=200, per_paper=1, since=since, until=until, rerank=False)
+        hits = self.passages(q, k=200, per_paper=1, since=since, until=until, rerank=False, rewrite=mode)
         lists.append([h["paper_key"] for h in hits])
         best_passage = {h["paper_key"]: h for h in hits}
         fused = {}
@@ -423,6 +471,8 @@ def main():
     ap.add_argument("--papers", nargs="+", metavar="KEY", help="compare: these papers instead of the top-ranked")
     ap.add_argument("--since", type=int, help="only papers from this year on")
     ap.add_argument("--until", type=int, help="only papers up to this year")
+    ap.add_argument("--no-rewrite", action="store_true",
+                    help="don't rewrite the question into ML terminology with Claude before searching")
     a = ap.parse_args()
     if a.command != "chat" and not a.query:
         ap.error(f"'{a.command}' needs a query")
@@ -431,7 +481,7 @@ def main():
     if a.command == "cite":
         import cite
         return cite.run([a.query] + a.more_keys, a.out)
-    ix = Index()
+    ix = Index(rewrite="off") if a.no_rewrite else Index()
     {"search": cmd_search, "ask": cmd_ask, "reading": cmd_reading, "compare": cmd_compare,
      "similar": cmd_similar, "chat": cmd_chat}[a.command](ix, a)
 

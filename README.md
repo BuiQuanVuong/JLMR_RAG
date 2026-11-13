@@ -2,7 +2,9 @@
 
 A local search engine plus Claude-powered Q&A over the 4,138 JMLR papers in `..\JMLR`.
 
-Search runs locally and costs nothing. Only `ask`, `reading`, `compare` and `chat` questions call the Claude API.
+`search` and `similar` run locally and cost nothing. `ask`, `reading`, `compare` and `chat` call the Claude
+API; for `ask` and `compare` that includes a query rewrite before retrieval (about $0.0004 and 4 s per new
+question, cached; `--no-rewrite` turns it off, and without an API key retrieval silently uses your words).
 
 ## Setup (one time)
 
@@ -36,7 +38,8 @@ python ask.py cite v20/13-124 v13/gretton12a --out refs.bib    # BibTeX (UTF-8; 
 python ask.py chat                                        # interactive, remembers the conversation (see below)
 ```
 
-Options: `--since YEAR`, `--until YEAR`, and `-k N` for the number of passages or papers.
+Options: `--since YEAR`, `--until YEAR`, `-k N` for the number of passages or papers, and `--no-rewrite` to
+search with your own words only (no API call before retrieval).
 
 **Cost per question (approx.):** Haiku 5.5 about $0.001, Opus 5.5 about $0.03–0.08. Each answer prints its actual token use and cost.
 
@@ -44,6 +47,14 @@ Options: `--since YEAR`, `--until YEAR`, and `-k N` for the number of passages o
 
 - **Passages:** each paper is split into overlapping 300-word passages that keep their page numbers. Bibliography passages are detected and excluded.
 - **Hybrid retrieval:** BM25 keyword search (SQLite FTS5) and semantic search (`BAAI/bge-small-en-v1.5` embeddings) are fused with reciprocal rank fusion.
+- **Query rewriting (`rewrite.py`):** before retrieval, Claude Haiku 5.5 restates the question in the
+  terminology a paper would use (plus keywords), e.g. "a way to pick how wide the similarity function should
+  be" becomes "kernel bandwidth selection, Gaussian/RBF kernel, median heuristic". Four ranked lists are fused:
+  dense and BM25 for the original question, dense for the rewrite, BM25 for rewrite + keywords. The reranker
+  still scores against your original question. `ask` and `compare` (paper selection) use it; `search` and
+  `reading` don't (topic search is already at 100%). Rewrites are cached in `eval
+ewrite_cache.json`; if the
+  API is unreachable or there is no key, the original question is used.
 - **Reranking:** the top 100 fused candidates are re-scored by a cross-encoder (`BAAI/bge-reranker-v2-m3`, on the GPU). It reads the title and the passage together. At most 3 passages come from any one paper, so answers draw on several papers.
 - **Section labels:** every passage knows its section (for example "Numerical Experiments / Empirical Size"). Labels come from the PDF's bookmarks or from detected numbered headings, and they're shown in answers and source lists. Re-run them with `python build_index.py --sections-only`.
 - **Answers:** Claude answers only from the retrieved passages and cites them as [n]. Each answer ends with the source list (paper, year, page, key) so you can open the PDF.

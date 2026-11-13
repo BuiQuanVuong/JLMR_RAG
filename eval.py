@@ -1,10 +1,12 @@
 """Score retrieval quality against eval/questions.jsonl (built by make_eval.py).
 
-Free and local: no API calls. Run it before and after every retrieval change and compare.
+Free and local, except the Claude query rewrite (rewrite.py), which is cached in eval/rewrite_cache.json
+(fill it once with `python rewrite.py --eval`). Run it before and after every retrieval change and compare.
 
   python eval.py                      score the current system, label 'hybrid'
   python eval.py --label reranker     name this run (shows up in eval/history.csv)
   python eval.py --modes              also score keyword-only and meaning-only search
+  python eval.py --rewrite off        without the Claude query rewrite (or bm25|both|fuse|hyde|multi)
 
 Question groups
   standard  passage questions that reuse the paper's own terms (easy for keyword search)
@@ -23,8 +25,8 @@ import json
 import time
 from datetime import datetime
 
-from ask import Index
-from common import RERANK_MODEL, RERANK_POOL, ROOT, utf8_console
+from ask import REWRITE_MODES, Index
+from common import RERANK_MODEL, RERANK_POOL, REWRITE, ROOT, utf8_console
 
 EVAL = ROOT / "eval"
 
@@ -63,11 +65,15 @@ def main():
     ap.add_argument("--pool", type=int, default=RERANK_POOL, help="candidates re-scored by the reranker")
     ap.add_argument("--section-rerank", action="store_true",
                     help="also show the reranker the passage's section heading (measured slightly worse)")
+    ap.add_argument("--rewrite", choices=REWRITE_MODES, default=REWRITE,
+                    help=f"how passages() uses the Claude query rewrite (default: {REWRITE})")
+    ap.add_argument("--rewrite-search", action="store_true",
+                    help="also use the rewrite for topic search (rank_papers)")
     a = ap.parse_args()
 
     qs = [json.loads(l) for l in open(EVAL / "questions.jsonl", encoding="utf-8") if l.strip()]
     ix = Index(rerank_model=None if a.rerank == "none" else a.rerank, rerank_pool=a.pool,
-               section_in_rerank=a.section_rerank)
+               section_in_rerank=a.section_rerank, rewrite=a.rewrite, rewrite_search=a.rewrite_search)
 
     runs = [("hybrid", a.label)] + ([("dense", "dense-only"), ("sparse", "keyword-only")] if a.modes else [])
     summary = []
