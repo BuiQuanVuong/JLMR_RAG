@@ -9,7 +9,7 @@
   python ask.py similar v20/13-124                          papers similar to a given paper (local)
   python ask.py open v20/13-124                             open a paper's PDF
   python ask.py cite v20/13-124 v13/gretton12a --out refs.bib   BibTeX for papers
-  python ask.py chat                                        interactive mode
+  python ask.py chat                                        interactive mode with conversation memory
 
 Filters for search/ask/reading: --since YEAR, --until YEAR, -k N (number of passages/papers).
 """
@@ -181,8 +181,10 @@ class Index:
 
 # ---------------------------------------------------------------- Claude
 
-def call_claude(model_name, system, user_text):
-    """Stream Claude's answer to the terminal. Returns the final message."""
+def call_claude(model_name, system, user_text, history=None):
+    """Stream Claude's answer to the terminal. Returns the final message.
+    history: optional earlier messages (alternating user/assistant, starting with user) sent before
+    user_text, for multi-turn chat."""
     try:
         import anthropic
         client = anthropic.Anthropic()
@@ -190,7 +192,7 @@ def call_claude(model_name, system, user_text):
         sys.exit(f"Could not create Anthropic client ({e}). Set ANTHROPIC_API_KEY first - see README.md.")
     model = MODELS[model_name]
     common = dict(model=model, max_tokens=16000, system=system,
-                  messages=[{"role": "user", "content": user_text}])
+                  messages=[*(history or []), {"role": "user", "content": user_text}])
     try:
         if model_name == "opus":
             # Opus 5.5: server-side fallback re-runs a safety-declined request on a fallback model
@@ -309,15 +311,71 @@ def cmd_open(a):
     os.startfile(path)
 
 
+def source_label(ix, h):
+    """Short label for a retrieved passage, used in the chat history: title, first author, year, page."""
+    p = ix.papers[h["paper_key"]]
+    authors = p["authors"] or ""
+    first = authors.split(",")[0].strip() + (" et al." if "," in authors else "")
+    sec = f", {h['section']}" if h.get("section") else ""
+    return f"{p['title']} ({first}, {p['year']}), p.{h['page_start']}{sec}  [{p['key']}]"
+
+
+def chat_ask(ix, a, conv):
+    """One conversational turn: condense a follow-up into a standalone query, retrieve, answer with the
+    earlier turns as context, and record the turn in conv."""
+    from conversation import CHAT_SYSTEM_ADDENDUM
+    query = a.query
+    if len(conv):
+        query, cost, err = conv.condense(a.query)
+        if err:
+            print(f"(Could not condense the follow-up - {err}; searching for the question as typed.)")
+        else:
+            print(f"Searching for: {query}  (condensed by {MODELS['haiku']}, ~${cost:.4f})")
+    hits = ix.passages(query, k=a.k or 12, since=a.since, until=a.until)
+    if not hits:
+        print("No matching passages found.")
+        return
+    blocks = []
+    for i, h in enumerate(hits, 1):
+        p = ix.papers[h["paper_key"]]
+        pages = f"{h['page_start']}" + (f"-{h['page_end']}" if h["page_end"] != h["page_start"] else "")
+        section = f' section="{h["section"]}"' if h.get("section") else ""
+        blocks.append(f'<source id="{i}" title="{p["title"]}" authors="{p["authors"]}" year="{p["year"]}" '
+                      f'pages="{pages}"{section}>\n{h["text"]}\n</source>')
+    searched = f"\n(These sources were retrieved with the search query: {query})" if query != a.query else ""
+    user = (f"{conv.current_label()}. New sources for this turn (cite these as [n]):\n<sources>\n"
+            + "\n".join(blocks) + f"\n</sources>{searched}\n\nQuestion: {a.query}")
+    history = conv.history_messages()
+    mem = f", with {len(history) // 2} earlier turn(s) as context" if history else ""
+    print(f"Retrieved {len(hits)} passages from {len({h['paper_key'] for h in hits})} papers. "
+          f"Asking {MODELS[a.model]}{mem}...\n")
+    msg = call_claude(a.model, SYSTEM + CHAT_SYSTEM_ADDENDUM, user, history=history)
+    answer = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+    labels = [source_label(ix, h) for h in hits]
+    if answer and msg.stop_reason != "refusal":
+        conv.add(a.query, query, answer, labels)
+    print("\nSources:")
+    for i, label in enumerate(labels, 1):
+        print(f" [{i}] {label}")
+    print("\nOpen a paper with:  /open <key>")
+
+
+CHAT_HELP = """JMLR assistant with conversation memory. Type a question to get a cited answer; follow-ups
+("which of those handles noise?", "how does [2] do it?") build on the earlier turns.
+  /new (or /reset)   start a fresh conversation      /opus  /haiku   switch model (memory is kept)
+  /search <query>   /reading <topic>   /compare <question>   /similar <key>   /open <key>
+                     one-shot commands: they neither use nor add to the conversation memory
+  /help   /quit"""
+
+
 def cmd_chat(ix, a):
-    print("JMLR assistant. Type a question to get a cited answer.\n"
-          "  /search <query>   /reading <topic>   /compare <question>   /similar <key>   /open <key>\n"
-          "  /opus  /haiku  (switch model)   /quit\n"
-          "Each question is answered independently (no memory of earlier questions).")
+    from conversation import Conversation
+    print(CHAT_HELP)
     model = a.model
+    conv = Conversation()
     while True:
         try:
-            line = input(f"\n[{model}] > ").strip()
+            line = input(f"\n[{model} | memory: {len(conv)} turn{'' if len(conv) == 1 else 's'}] > ").strip()
         except (EOFError, KeyboardInterrupt):
             break
         if not line:
@@ -328,17 +386,26 @@ def cmd_chat(ix, a):
             model = line[1:]
             print(f"Model set to {MODELS[model]}")
             continue
+        if line in ("/new", "/reset"):
+            conv.reset()
+            print("Started a new conversation (memory cleared).")
+            continue
+        if line in ("/help", "/?"):
+            print(CHAT_HELP)
+            continue
         cmd, _, rest = line.partition(" ") if line.startswith("/") else ("/ask", "", line)
         sub = argparse.Namespace(query=rest.strip(), model=model, k=a.k, since=a.since, until=a.until, papers=None)
-        fn = {"/ask": cmd_ask, "/search": cmd_search, "/reading": cmd_reading, "/similar": cmd_similar,
+        fn = {"/search": cmd_search, "/reading": cmd_reading, "/similar": cmd_similar,
               "/compare": cmd_compare}.get(cmd)
         try:
-            if cmd == "/open":
+            if cmd == "/ask":
+                chat_ask(ix, sub, conv)
+            elif cmd == "/open":
                 cmd_open(sub)
             elif fn:
                 fn(ix, sub)
             else:
-                print("Unknown command.")
+                print("Unknown command (/help lists them).")
         except SystemExit as e:
             print(e)
 
