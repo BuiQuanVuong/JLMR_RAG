@@ -28,6 +28,8 @@ python ask.py search "kernel two-sample tests"            # rank papers (free, l
 python ask.py ask "How is the MMD estimator's variance controlled?"      # cited answer, Claude Haiku 5.5
 python ask.py ask "Compare PAC-Bayes and Rademacher bounds for deep nets" --opus   # Claude Opus 5.5
 python ask.py reading "causal discovery" --since 2015     # ordered reading list
+python ask.py compare "How do these tests choose the kernel bandwidth?" -k 4     # side-by-side comparison
+python ask.py compare "..." --papers v13/gretton12a v24/21-1289                  # compare chosen papers
 python ask.py similar v20/13-124                          # papers like this one (free)
 python ask.py open v20/13-124                             # open the PDF
 python ask.py chat                                        # interactive; /opus and /haiku switch models
@@ -66,6 +68,20 @@ keyword-only and meaning-only search. Run it before and after every retrieval ch
 Also tested: MiniLM and bge-reranker-base rerankers (both worse on hard questions), and section headings in
 the reranker input (slightly worse). Topic search stays at 100%. Standard and topic questions are near
 100%, so they only catch regressions.
+
+## Comparison mode (`compare.py`)
+
+`compare` runs in two stages, so findings stay attached to the right paper:
+
+1. **Evidence records:** it picks the top papers (6 by default, `-k N`, or `--papers KEY ...`) and retrieves
+   the best 5 passages *within* each paper with hybrid search and the reranker. Claude Haiku 5.5 then turns
+   each paper into a structured record (problem, approach, setting, findings with citations, limitations,
+   relevance). These calls run in parallel.
+2. **Synthesis:** Claude (Haiku 5.5, or Opus 5.5 with `--opus`) compares the records. It writes a short
+   answer, a comparison table, agreements and tensions, open questions among these papers, and what to read.
+
+Citations look like `[P2.3]` (paper 2, passage 3), and each one is listed with its page and section. A
+4-paper comparison costs about $0.006 with Haiku, or about $0.06–0.10 with `--opus` for the synthesis.
 
 ## Adding new papers later
 

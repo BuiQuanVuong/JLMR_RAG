@@ -4,6 +4,8 @@
   python ask.py ask "How do GP bandits handle ...?"         answer with citations (Claude Haiku 5.5)
   python ask.py ask "..." --opus                            same, with Claude Opus 5.5 for hard questions
   python ask.py reading "causal discovery"                  ordered reading list (Claude)
+  python ask.py compare "How do they choose the bandwidth?" compare papers side by side (Claude)
+  python ask.py compare "..." --papers v13/gretton12a v24/21-1289    compare specific papers
   python ask.py similar v20/13-124                          papers similar to a given paper (local)
   python ask.py open v20/13-124                             open a paper's PDF
   python ask.py chat                                        interactive mode
@@ -283,6 +285,11 @@ def cmd_reading(ix, a):
         print(f" [{i}] {p['title']} ({p['year']})  [{p['key']}]")
 
 
+def cmd_compare(ix, a):
+    import compare
+    compare.run(ix, a, call_claude, MODELS)
+
+
 def cmd_similar(ix, a):
     p0 = ix.papers.get(a.query)
     if p0:
@@ -303,7 +310,7 @@ def cmd_open(a):
 
 def cmd_chat(ix, a):
     print("JMLR assistant. Type a question to get a cited answer.\n"
-          "  /search <query>   /reading <topic>   /similar <key>   /open <key>\n"
+          "  /search <query>   /reading <topic>   /compare <question>   /similar <key>   /open <key>\n"
           "  /opus  /haiku  (switch model)   /quit\n"
           "Each question is answered independently (no memory of earlier questions).")
     model = a.model
@@ -321,8 +328,9 @@ def cmd_chat(ix, a):
             print(f"Model set to {MODELS[model]}")
             continue
         cmd, _, rest = line.partition(" ") if line.startswith("/") else ("/ask", "", line)
-        sub = argparse.Namespace(query=rest.strip(), model=model, k=a.k, since=a.since, until=a.until)
-        fn = {"/ask": cmd_ask, "/search": cmd_search, "/reading": cmd_reading, "/similar": cmd_similar}.get(cmd)
+        sub = argparse.Namespace(query=rest.strip(), model=model, k=a.k, since=a.since, until=a.until, papers=None)
+        fn = {"/ask": cmd_ask, "/search": cmd_search, "/reading": cmd_reading, "/similar": cmd_similar,
+              "/compare": cmd_compare}.get(cmd)
         try:
             if cmd == "/open":
                 cmd_open(sub)
@@ -337,11 +345,12 @@ def cmd_chat(ix, a):
 def main():
     utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["search", "ask", "reading", "similar", "open", "chat"])
+    ap.add_argument("command", choices=["search", "ask", "reading", "compare", "similar", "open", "chat"])
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("--opus", dest="model", action="store_const", const="opus", default="haiku",
                     help="use Claude Opus 5.5 instead of Claude Haiku 5.5")
-    ap.add_argument("-k", type=int, help="number of passages (ask) or papers (search/reading/similar)")
+    ap.add_argument("-k", type=int, help="number of passages (ask) or papers (search/reading/similar/compare)")
+    ap.add_argument("--papers", nargs="+", metavar="KEY", help="compare: these papers instead of the top-ranked")
     ap.add_argument("--since", type=int, help="only papers from this year on")
     ap.add_argument("--until", type=int, help="only papers up to this year")
     a = ap.parse_args()
@@ -350,7 +359,7 @@ def main():
     if a.command == "open":
         return cmd_open(a)
     ix = Index()
-    {"search": cmd_search, "ask": cmd_ask, "reading": cmd_reading,
+    {"search": cmd_search, "ask": cmd_ask, "reading": cmd_reading, "compare": cmd_compare,
      "similar": cmd_similar, "chat": cmd_chat}[a.command](ix, a)
 
 

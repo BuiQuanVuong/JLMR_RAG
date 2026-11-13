@@ -85,13 +85,13 @@ def text_headings(raw_pages):
             m = NUMBERED_HEADING.match(line)
             if m and len(line.split()) <= 10 and not line.endswith((".", ",", ";", ":")):
                 num = tuple(int(x) for x in m.group(1).split("."))
-                if num > last and num[0] <= last[0] + 1:
+                if num > last and num[0] <= last[0] + 3:   # tolerate a heading or two missed by extraction
                     last = num
                     title = f"{m.group(1)} {m.group(2).strip()}"
                     parents[len(num)] = title
                     label = title if len(num) == 1 else f"{parents.get(1, '')} / {title}".strip(" /")
                     out.append((pno, m.group(2).strip(), label))
-            elif NAMED_HEADING.match(line):
+            elif NAMED_HEADING.match(line) and not line.endswith("."):   # "Appendix B.2." = a cross-reference
                 out.append((pno, line, line))
     return out
 
