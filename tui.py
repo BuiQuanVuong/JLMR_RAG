@@ -307,7 +307,7 @@ class ResearchApp(App):
         if lid == "sources" and i < len(self.sources):
             self._open(self.sources[i][1])
         elif lid == "search-results" and i < len(self.search_hits):
-            self._open(self.search_hits[i][0]["key"])
+            self._open(self.search_hits[i][0]["key"])           # (paper, passage, missing)
         elif lid == "session-list" and i < len(self.session_rows):
             if self.busy:
                 return self.notify("Wait for the current answer to finish.", severity="warning")
@@ -326,33 +326,50 @@ class ResearchApp(App):
 
     @work(thread=True, exclusive=True, group="search")
     def search_worker(self, q):
+        import boolq
+        summary = ""
         with quiet():
-            ranked = self.ix.rank_papers(q, k=25)
+            if boolq.is_boolean(q):
+                r, rows = ask.boolean_search(self.ix, q, k=25)
+                n_pos = sum(not c.negated for c in r.clauses)
+                summary = (f"{len(r.strict)} papers match every term" if r.strict else
+                           f"No paper matches every term - closest matches (of {n_pos} terms)" if rows else
+                           "No paper matches any term")
+                summary += "\n\n" + "\n".join(f"- {line.strip()}" for line in boolq.describe(r))
+            else:
+                rows = [(p, hit, []) for p, hit in self.ix.rank_papers(q, k=25)]
             topic_of = topics.paper_topic_names(connect())
-        self.call_from_thread(self.show_search, ranked, topic_of)
+        self.call_from_thread(self.show_search, rows, topic_of, summary)
 
-    def show_search(self, ranked, topic_of):
-        self.search_hits = ranked
+    def show_search(self, rows, topic_of, summary=""):
+        self.search_hits = rows
+        self._search_summary = summary
         ol = self.query_one("#search-results", OptionList)
         ol.clear_options()
-        ol.add_options([Option(Text(f"{p['title']} ({p['year']})")) for p, _ in ranked])
+        ol.add_options([Option(Text(f"{p['title']} ({p['year']})" + (f"  - missing {len(m)}" if m else "")))
+                        for p, _, m in rows])
         self._topic_of = topic_of
-        if ranked:
+        if summary:
+            self.query_one("#search-detail", Markdown).update(f"**Scholar-style query:** {summary}")
+        if rows:
             ol.highlighted = 0
             ol.focus()
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
         lid, i = event.option_list.id, event.option_index
         if lid == "search-results" and i is not None and i < len(self.search_hits):
-            p, hit = self.search_hits[i]
+            p, hit, missing = self.search_hits[i]
             where = ""
             if hit:
                 sec = f", {hit['section']}" if hit.get("section") else ""
                 where = f"\n\n**Best match** (p.{hit['page_start']}{sec}): {hit['text'][:600]}..."
             topic = getattr(self, "_topic_of", {}).get(p["key"], "")
+            miss = f"\n\n**Missing:** {', '.join(missing)}" if missing else ""
+            summary = getattr(self, "_search_summary", "")
             self.query_one("#search-detail", Markdown).update(
                 f"### {p['title']}\n\n{p['authors']} ({p['year']})  `{p['key']}`"
-                + (f"\n\nTopic: {topic}" if topic else "") + f"\n\n{p['abstract'] or ''}{where}\n\n_Enter opens the PDF._")
+                + (f"\n\nTopic: {topic}" if topic else "") + miss + f"\n\n{p['abstract'] or ''}{where}"
+                + "\n\n_Enter opens the PDF._" + (f"\n\n---\n\n**Query:** {summary}" if summary else ""))
         elif lid == "session-list" and i is not None and i < len(self.session_rows):
             conv = Conversation.load(self.session_rows[i]["id"])
             qs = "\n".join(f"{n}. {t.question}" for n, t in enumerate(conv.turns, 1))

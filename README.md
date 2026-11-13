@@ -72,6 +72,24 @@ python ask.py topics --for "your question"                # which subtopics a qu
 python ask.py chat                                        # interactive, remembers the conversation (see below)
 ```
 
+**Google Scholar-style queries (`boolq.py`):** `search` (and the app's Search tab) switches to Boolean
+matching when a query uses the syntax:
+- `"exact phrase"`
+- `a OR b`
+- `-exclude`
+- `intitle:word`
+- `author:Name`
+- every other word is required
+
+For example: `search 'federated "differential privacy" -bandit'` or `search 'intitle:"two-sample" kernel author:Gretton'`.
+- **Whole papers:** as in Scholar, terms may appear anywhere in a paper (bibliographies are ignored), and
+  matching papers are ranked by relevance.
+- **No dead ends:** if no paper matches every term, it prints how many papers contain each term and lists
+  the papers matching the most terms, with what each one is missing.
+- **Filtering questions:** `ask` and `compare` take `--filter '<query>'` to answer only from matching papers.
+- **Literal matching:** matching is literal, like Scholar's. A common word such as `distributed` also
+  matches "distributed as Gaussian".
+
 Options: `--since YEAR`, `--until YEAR`, `-k N` for the number of passages or papers, and `--no-rewrite` to
 search with your own words only (no API call before retrieval).
 

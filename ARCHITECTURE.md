@@ -69,6 +69,8 @@ This file explains how the parts fit together and why they are built the way the
 | `tui.py` | Full-screen Textual app (Chat / Search / Topics / Sessions). Retrieval and Claude calls run in worker threads and stream into Markdown widgets. |
 | `ui.py` | Terminal rendering for the line interface: Rich Markdown streaming, spinner, prompt_toolkit input. |
 | `tests/test_tui.py` | Headless app test with a fake index and a fake Claude stream. |
+| `boolq.py` | Google Scholar-style queries: parser and whole-paper matching, with closest matches when nothing matches strictly. |
+| `tests/test_boolq.py` | Parser and matching tests against the real database. |
 | `make_eval.py` / `eval.py` | Builds the 140-question evaluation set; scores retrieval. |
 | `embed_test.py` | Compares candidate embedding models on a subset index. |
 
@@ -125,6 +127,19 @@ out of search, so about 247,000 are searchable.
 | Reranking | The top 40 fused candidates are re-scored by `BAAI/bge-reranker-v2-m3` (fp16, GPU) on `(original question, "<title>. <passage>")`. | `RERANK_POOL = 40` |
 | Diversity | At most 3 passages per paper, and the first 12 are kept. | `per_paper=3, k=12` |
 | Filters | `--since` / `--until` mask by publication year in both searches. | |
+
+**Boolean queries** (`boolq.py`). When a query uses Scholar syntax (quotes, `OR`, `-x`, `intitle:`,
+`author:`), it is parsed into AND-ed clauses of OR-ed terms.
+- **Per-term lookup:** each term becomes a set of papers. Words and phrases use FTS5 over non-bibliography
+  passages, `intitle:` uses `papers_fts` limited to the title column, and `author:` uses a LIKE match.
+  Results are cached per term.
+- **Combining:** a paper matches if it satisfies every positive clause and no negated one. Matching is per
+  paper, not per passage, as in Scholar.
+- **Ranking:** the matches go to `rank_papers(..., allowed=keys)` and are ranked by the query's plain
+  words. The filter reaches the dense mask and, through a temporary `allowed_keys` table, the FTS joins.
+- **Fallback:** with no strict match, papers are grouped by how many clauses they satisfy, and the tiers are
+  ranked best first.
+- **`--filter`:** on `ask` and `compare`, the same matching passes `allowed` to `passages()`.
 
 **Paper ranking** (`rank_papers`, used by `search` and `reading`) fuses three lists without the reranker
 or the rewrite: title+abstract embedding similarity, BM25 over `papers_fts` (title weighted 5×, abstract

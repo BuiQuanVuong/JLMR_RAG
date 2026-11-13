@@ -87,9 +87,9 @@ keep each paper's findings attributed to that paper; skip records marked not rel
 
 # ---------------------------------------------------------------- retrieval
 
-def pick_papers(ix, question, n, since, until):
-    """Top-n distinct papers by reranked passage relevance."""
-    hits = ix.passages(question, k=n, per_paper=1, since=since, until=until)
+def pick_papers(ix, question, n, since, until, allowed=None):
+    """Top-n distinct papers by reranked passage relevance (optionally only among `allowed` papers)."""
+    hits = ix.passages(question, k=n, per_paper=1, since=since, until=until, allowed=allowed)
     return [h["paper_key"] for h in hits]
 
 
@@ -163,7 +163,11 @@ def format_record(i, paper, rec):
 def run(ix, a, call_claude, models):
     import anthropic
     question = a.query
-    keys = a.papers or pick_papers(ix, question, a.k or 6, a.since, a.until)
+    allowed = None
+    if getattr(a, "filter", None) and not a.papers:
+        from ask import require_filter
+        allowed = require_filter(ix, a.filter)
+    keys = a.papers or pick_papers(ix, question, a.k or 6, a.since, a.until, allowed)
     missing = [k for k in keys if k not in ix.papers]
     if missing:
         sys.exit(f"Unknown paper key(s): {', '.join(missing)} (format: v20/13-124)")

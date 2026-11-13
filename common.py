@@ -83,7 +83,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
 
 def connect(path=None):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path or DB_PATH)
+    # check_same_thread=False: the full-screen app loads the index in one worker thread and queries it from
+    # others. Safe here because this SQLite build is compiled serialized (sqlite3.threadsafety == 3).
+    con = sqlite3.connect(path or DB_PATH, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)

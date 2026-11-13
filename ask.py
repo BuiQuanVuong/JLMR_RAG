@@ -131,14 +131,23 @@ class Index:
     def year_ok(y, since, until):
         return (since is None or y >= since) and (until is None or y <= until)
 
+    def _allow(self, allowed):
+        """Load a paper filter into a temp table so FTS queries can join on it."""
+        self.con.execute("CREATE TEMP TABLE IF NOT EXISTS allowed_keys(k TEXT PRIMARY KEY)")
+        self.con.execute("DELETE FROM allowed_keys")
+        self.con.executemany("INSERT INTO allowed_keys VALUES(?)", [(k,) for k in allowed])
+
     def passages(self, q, k=12, per_paper=3, since=None, until=None, pool=200, mode="hybrid", rerank=True,
-                 rewrite=None):
+                 rewrite=None, allowed=None):
         """Hybrid retrieval: dense (bge) + BM25 (SQLite FTS5), fused with reciprocal rank fusion, then
         (optionally) the top RERANK_POOL candidates re-scored by a cross-encoder against the ORIGINAL q.
         rewrite = None (use the Index setting) or one of REWRITE_MODES: which retrieval lists use the
-        Claude rewrite of q. mode = 'hybrid' | 'dense' | 'sparse' (single-signal modes, for evaluation)."""
+        Claude rewrite of q. mode = 'hybrid' | 'dense' | 'sparse' (single-signal modes, for evaluation).
+        allowed = optional set of paper keys to search within (e.g. the matches of a Boolean query)."""
         dense_q, sparse_q = self.query_variants(q, rewrite)
         lists = []
+        if allowed is not None:
+            self._allow(allowed)
         if mode in ("hybrid", "dense"):
             vecs = self.model.encode([(QUERY_PREFIX + t) if is_q else t for t, is_q in dense_q],
                                      normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
@@ -147,19 +156,23 @@ class Index:
                 mask &= self.chunk_year >= since
             if until:
                 mask &= self.chunk_year <= until
+            if allowed is not None:
+                mask &= np.isin(self.chunk_paper, list(allowed))
             for qv in vecs:
                 scores = self.chunk_emb @ qv
                 scores[~mask] = -1
-                lists.append(self.chunk_ids[np.argsort(-scores)[:pool]].tolist())
+                top = np.argsort(-scores)[:pool]
+                lists.append(self.chunk_ids[top[mask[top]]].tolist())
 
         for text in (sparse_q if mode in ("hybrid", "sparse") else []):
             fq = self.fts_query(text)
             if not fq:
                 continue
-            rows = self.con.execute("""SELECT c.id, p.year FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
-                                       JOIN papers p ON p.key = c.paper_key
-                                       WHERE chunks_fts MATCH ? AND c.is_ref = 0
-                                       ORDER BY bm25(chunks_fts) LIMIT ?""", (fq, pool * 3)).fetchall()
+            only = " AND c.paper_key IN (SELECT k FROM allowed_keys)" if allowed is not None else ""
+            rows = self.con.execute(f"""SELECT c.id, p.year FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
+                                        JOIN papers p ON p.key = c.paper_key
+                                        WHERE chunks_fts MATCH ? AND c.is_ref = 0{only}
+                                        ORDER BY bm25(chunks_fts) LIMIT ?""", (fq, pool * 3)).fetchall()
             lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:pool])
 
         fused = {}
@@ -193,18 +206,21 @@ class Index:
                 break
         return out
 
-    def rank_papers(self, q, k=10, since=None, until=None):
+    def rank_papers(self, q, k=10, since=None, until=None, allowed=None):
         """Paper ranking: fuse title/abstract similarity, abstract keyword match and best passage hits.
-        With rewrite_search, the Claude rewrite adds its own title/abstract lists and passage lists."""
+        With rewrite_search, the Claude rewrite adds its own title/abstract lists and passage lists.
+        allowed = optional set of paper keys to rank (e.g. Boolean-query matches); every allowed paper is
+        returned (up to k), the ones no ranking list reached last, newest first."""
         mode = self.rewrite if self.rewrite_search else "off"
         dense_q, sparse_q = self.query_variants(q, mode)
+        ok = (lambda key: key in allowed) if allowed is not None else (lambda key: True)
         lists = []
         vecs = self.model.encode([(QUERY_PREFIX + t) if is_q else t for t, is_q in dense_q],
                                  normalize_embeddings=True, convert_to_numpy=True).astype(np.float32)
         for qv in vecs:
             ps = self.paper_emb @ qv
             lists.append([self.paper_keys[i] for i in np.argsort(-ps)
-                          if self.year_ok(self.paper_year[i], since, until)][:200])
+                          if self.year_ok(self.paper_year[i], since, until) and ok(self.paper_keys[i])][:200])
         for text in sparse_q:
             fq = self.fts_query(text)
             if not fq:
@@ -212,16 +228,21 @@ class Index:
             rows = self.con.execute("""SELECT p.key, p.year FROM papers_fts JOIN papers p ON p.rowid = papers_fts.rowid
                                        WHERE papers_fts MATCH ? ORDER BY bm25(papers_fts, 5.0, 1.0, 2.0)
                                        LIMIT 300""", (fq,)).fetchall()
-            lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:200])
-        hits = self.passages(q, k=200, per_paper=1, since=since, until=until, rerank=False, rewrite=mode)
+            lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until) and ok(r[0])][:200])
+        hits = self.passages(q, k=200, per_paper=1, since=since, until=until, rerank=False, rewrite=mode,
+                             allowed=allowed)
         lists.append([h["paper_key"] for h in hits])
         best_passage = {h["paper_key"]: h for h in hits}
         fused = {}
         for ranked in lists:
             for rank, key in enumerate(ranked):
                 fused[key] = fused.get(key, 0) + 1 / (60 + rank)
-        top = sorted(fused, key=fused.get, reverse=True)[:k]
-        return [(self.papers[key], best_passage.get(key)) for key in top]
+        top = sorted(fused, key=fused.get, reverse=True)
+        if allowed is not None:       # matches no list reached still belong in the result
+            rest = [key for key in allowed if key not in fused and key in self.papers
+                    and self.year_ok(self.papers[key]["year"] or 0, since, until)]
+            top += sorted(rest, key=lambda key: -(self.papers[key]["year"] or 0))
+        return [(self.papers[key], best_passage.get(key)) for key in top[:k]]
 
     def similar(self, key, k=10):
         idx = np.where(self.paper_keys == key)[0]
@@ -316,12 +337,61 @@ def wrap(s, n=300, indent="     "):
     return textwrap.fill(s, 100, initial_indent=indent, subsequent_indent=indent)
 
 
+def boolean_search(ix, q, k=10, since=None, until=None):
+    """Scholar-style query (boolq.py): papers matching every term, ranked by hybrid relevance to the query's
+    words. If none match, the papers matching the most terms, best tier first.
+    Returns (boolq.Result, [(paper, best passage, [missing terms])])."""
+    import boolq
+    r = boolq.match(ix.con, q)
+    text = boolq.plain_text(r.clauses) or q
+    if r.strict:
+        return r, [(p, hit, []) for p, hit in ix.rank_papers(text, k=k, since=since, until=until,
+                                                             allowed=r.strict)]
+    missing = {key: miss for key, _, miss in r.partial}
+    out = []
+    for n in sorted({n for _, n, _ in r.partial}, reverse=True):
+        tier = {key for key, m, _ in r.partial if m == n}
+        ranked = ix.rank_papers(text, k=k - len(out), since=since, until=until, allowed=tier)
+        out += [(p, hit, missing[p["key"]]) for p, hit in ranked]
+        if len(out) >= k:
+            break
+    return r, out
+
+
+def require_filter(ix, query):
+    """--filter for ask/compare: the set of papers matching a Scholar query; exits with term counts if empty."""
+    import boolq
+    r = boolq.match(ix.con, query)
+    if not r.strict:
+        sys.exit("No paper matches the filter " + repr(query) + ":\n" + "\n".join(boolq.describe(r))
+                 + "\nTry removing a term, or `search` with the same query to see the closest matches.")
+    print(f"Filter {query!r}: searching within {len(r.strict)} matching papers.")
+    return r.strict
+
+
 def cmd_search(ix, a):
+    import boolq
     import topics
     topic_of = topics.paper_topic_names(ix.con)
-    for i, (p, hit) in enumerate(ix.rank_papers(a.query, k=a.k or 10, since=a.since, until=a.until), 1):
+    if boolq.is_boolean(a.query):
+        r, rows = boolean_search(ix, a.query, k=a.k or 10, since=a.since, until=a.until)
+        print("Scholar-style query: " + " AND ".join(f"({c.label()})" for c in r.clauses))
+        print("\n".join(boolq.describe(r)))
+        if r.strict:
+            print(f"\n{len(r.strict)} papers match every term" + (f"; the top {len(rows)}:" if len(rows) <
+                                                                 len(r.strict) else ":") + "\n")
+        elif rows:
+            n_pos = sum(not c.negated for c in r.clauses)
+            print(f"\nNo paper matches every term. Closest matches (most terms first, of {n_pos}):\n")
+        else:
+            print("\nNo paper matches any of the terms.")
+    else:
+        rows = [(p, hit, []) for p, hit in ix.rank_papers(a.query, k=a.k or 10, since=a.since, until=a.until)]
+    for i, (p, hit, missing) in enumerate(rows, 1):
         tag = f"  [topic {topic_of[p['key']]}]" if p["key"] in topic_of else ""
         print(f"{i:2}. {paper_line(p)}\n     [{p['key']}]  {pdf_path(p)}{tag}")
+        if missing:
+            print(f"     missing: {', '.join(missing)}")
         if hit:
             where = f"p.{hit['page_start']}" + (f", {hit['section']}" if hit.get("section") else "")
             print(wrap(f"{where}: {hit['text']}", 240))
@@ -345,7 +415,8 @@ def answer_text(msg):
 
 
 def cmd_ask(ix, a):
-    hits = ix.passages(a.query, k=a.k or 12, since=a.since, until=a.until)
+    allowed = require_filter(ix, a.filter) if getattr(a, "filter", None) else None
+    hits = ix.passages(a.query, k=a.k or 12, since=a.since, until=a.until, allowed=allowed)
     if not hits:
         sys.exit("No matching passages found.")
     user = source_blocks(ix, hits) + f"\n\nQuestion: {a.query}"
@@ -568,6 +639,8 @@ def main():
                     help="use Claude Opus 5.5 instead of Claude Haiku 5.5")
     ap.add_argument("-k", type=int, help="number of passages (ask) or papers (search/reading/similar/compare)")
     ap.add_argument("--papers", nargs="+", metavar="KEY", help="compare: these papers instead of the top-ranked")
+    ap.add_argument("--filter", metavar="QUERY",
+                    help='ask/compare: only papers matching a Scholar-style query, e.g. \'federated "differential privacy" -bandit\'')
     ap.add_argument("--since", type=int, help="only papers from this year on")
     ap.add_argument("--until", type=int, help="only papers up to this year")
     ap.add_argument("--no-rewrite", action="store_true",
