@@ -18,8 +18,10 @@ for _name in ("torch.distributed.elastic.multiprocessing.redirects", "sentence_t
     logging.getLogger(_name).setLevel(logging.ERROR)
 
 ROOT = Path(__file__).resolve().parent
-JMLR_DIR = ROOT.parent / "JMLR"          # where the downloaded papers live
-DATA_DIR = ROOT / "data"
+# Overridable so a git worktree (or another checkout) can use the shared papers, index and key:
+#   JMLR_PAPERS_DIR, JMLR_RAG_DATA, JMLR_RAG_ENV_FILE
+JMLR_DIR = Path(os.environ.get("JMLR_PAPERS_DIR", ROOT.parent / "JMLR"))   # downloaded papers
+DATA_DIR = Path(os.environ.get("JMLR_RAG_DATA", ROOT / "data"))
 DB_PATH = DATA_DIR / "jmlr.db"
 CHUNK_EMB = DATA_DIR / "chunk_emb.npy"    # float16 [n_chunks, dim], row i <-> CHUNK_IDS[i]
 CHUNK_IDS = DATA_DIR / "chunk_ids.npy"
@@ -31,7 +33,7 @@ QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"  # best of 3 tested with eval.py; None disables reranking
 RERANK_POOL = 100                          # hybrid candidates re-scored (40 = ~2 s faster, ~5 pts lower)
 
-ENV_FILE = ROOT / ".env"
+ENV_FILE = Path(os.environ.get("JMLR_RAG_ENV_FILE", ROOT / ".env"))
 PLACEHOLDER = "paste-your-key-here"
 
 
