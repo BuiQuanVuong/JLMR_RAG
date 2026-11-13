@@ -1,0 +1,11 @@
+# secrets
+.env
+
+# local environment and generated data (rebuild with build_index.py + embed.py)
+.venv/
+data/
+__pycache__/
+*.log
+
+# per-run evaluation details (summary is kept in eval/history.csv)
+eval/results_*.csv
