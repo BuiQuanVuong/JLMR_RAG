@@ -32,6 +32,7 @@ python ask.py compare "How do these tests choose the kernel bandwidth?" -k 4    
 python ask.py compare "..." --papers v13/gretton12a v24/21-1289                  # compare chosen papers
 python ask.py similar v20/13-124                          # papers like this one (free)
 python ask.py open v20/13-124                             # open the PDF
+python ask.py cite v20/13-124 v13/gretton12a --out refs.bib    # BibTeX (UTF-8; avoid PowerShell '>')
 python ask.py chat                                        # interactive; /opus and /haiku switch models
 ```
 

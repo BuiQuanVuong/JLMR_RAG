@@ -9,3 +9,6 @@ __pycache__/
 
 # per-run evaluation details (summary is kept in eval/history.csv)
 eval/results_*.csv
+
+# Claude Code agent worktrees
+.claude/

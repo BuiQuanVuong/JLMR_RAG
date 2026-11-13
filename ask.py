@@ -8,6 +8,7 @@
   python ask.py compare "..." --papers v13/gretton12a v24/21-1289    compare specific papers
   python ask.py similar v20/13-124                          papers similar to a given paper (local)
   python ask.py open v20/13-124                             open a paper's PDF
+  python ask.py cite v20/13-124 v13/gretton12a --out refs.bib   BibTeX for papers
   python ask.py chat                                        interactive mode
 
 Filters for search/ask/reading: --since YEAR, --until YEAR, -k N (number of passages/papers).
@@ -345,8 +346,10 @@ def cmd_chat(ix, a):
 def main():
     utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["search", "ask", "reading", "compare", "similar", "open", "chat"])
+    ap.add_argument("command", choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "chat"])
     ap.add_argument("query", nargs="?", default="")
+    ap.add_argument("more_keys", nargs="*", help=argparse.SUPPRESS)   # cite: further paper keys
+    ap.add_argument("--out", help="cite: write a UTF-8 .bib file instead of printing")
     ap.add_argument("--opus", dest="model", action="store_const", const="opus", default="haiku",
                     help="use Claude Opus 5.5 instead of Claude Haiku 5.5")
     ap.add_argument("-k", type=int, help="number of passages (ask) or papers (search/reading/similar/compare)")
@@ -358,6 +361,9 @@ def main():
         ap.error(f"'{a.command}' needs a query")
     if a.command == "open":
         return cmd_open(a)
+    if a.command == "cite":
+        import cite
+        return cite.run([a.query] + a.more_keys, a.out)
     ix = Index()
     {"search": cmd_search, "ask": cmd_ask, "reading": cmd_reading, "compare": cmd_compare,
      "similar": cmd_similar, "chat": cmd_chat}[a.command](ix, a)
