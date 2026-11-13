@@ -28,6 +28,8 @@ PAPER_KEYS = DATA_DIR / "paper_keys.npy"
 
 EMB_MODEL = "BAAI/bge-small-en-v1.5"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+RERANK_MODEL = "BAAI/bge-reranker-v2-m3"  # best of 3 tested with eval.py; None disables reranking
+RERANK_POOL = 100                          # hybrid candidates re-scored (40 = ~2 s faster, ~5 pts lower)
 
 ENV_FILE = ROOT / ".env"
 PLACEHOLDER = "paste-your-key-here"
@@ -65,7 +67,8 @@ CREATE TABLE IF NOT EXISTS chunks(
     id INTEGER PRIMARY KEY,
     paper_key TEXT NOT NULL, seq INTEGER, page_start INTEGER, page_end INTEGER,
     is_ref INTEGER DEFAULT 0,       -- 1 = looks like a bibliography chunk (excluded from search)
-    text TEXT
+    text TEXT,
+    section TEXT                    -- e.g. 'Experiments / 4.2 Results on noisy data' ('' if unknown)
 );
 CREATE INDEX IF NOT EXISTS chunks_paper ON chunks(paper_key);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
@@ -75,12 +78,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
 """
 
 
-def connect():
+def connect(path=None):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(path or DB_PATH)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+    if "section" not in cols:          # migrate indexes built before section labels existed
+        con.execute("ALTER TABLE chunks ADD COLUMN section TEXT")
+        con.commit()
     return con
 
 
@@ -90,6 +97,15 @@ def utf8_console():
             s.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+
+
+def load_reranker(name):
+    """A cross-encoder that scores (query, passage) pairs jointly; fp16 on the GPU when available."""
+    import torch
+    from sentence_transformers import CrossEncoder
+    cuda = torch.cuda.is_available()
+    return CrossEncoder(name, device="cuda" if cuda else "cpu", max_length=512,
+                        model_kwargs={"torch_dtype": torch.float16} if cuda else {})
 
 
 def load_encoder():

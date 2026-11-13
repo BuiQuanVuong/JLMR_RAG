@@ -20,8 +20,8 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")   # the embedding model is cached b
 
 import numpy as np
 
-from common import (CHUNK_EMB, CHUNK_IDS, ENV_FILE, JMLR_DIR, PAPER_EMB, PAPER_KEYS, QUERY_PREFIX, connect,
-                    load_encoder, utf8_console)
+from common import (CHUNK_EMB, CHUNK_IDS, ENV_FILE, JMLR_DIR, PAPER_EMB, PAPER_KEYS, QUERY_PREFIX,
+                    RERANK_MODEL, RERANK_POOL, connect, load_encoder, load_reranker, utf8_console)
 
 MODELS = {"haiku": "claude-haiku-5-5", "opus": "claude-opus-5-5"}
 STOP = set("""a an the of and or in on for to with by from is are was were be been being as at that this
@@ -52,8 +52,12 @@ if important sub-areas are missing from the candidates, say so briefly."""
 # ---------------------------------------------------------------- retrieval
 
 class Index:
-    def __init__(self):
+    def __init__(self, rerank_model=RERANK_MODEL, rerank_pool=RERANK_POOL, section_in_rerank=False):
+        # section_in_rerank=True measured slightly worse (hard passage@12 60% vs 62%), so it is off
         self.con = connect()
+        self.rerank_pool = rerank_pool
+        self.section_in_rerank = section_in_rerank
+        self.reranker = load_reranker(rerank_model) if rerank_model else None
         if not CHUNK_IDS.exists():
             sys.exit("No embeddings yet - run: python embed.py")
         print("Loading index...", end="\r", file=sys.stderr)
@@ -85,8 +89,9 @@ class Index:
     def year_ok(y, since, until):
         return (since is None or y >= since) and (until is None or y <= until)
 
-    def passages(self, q, k=12, per_paper=3, since=None, until=None, pool=200, mode="hybrid"):
-        """Hybrid retrieval: dense (bge) + BM25 (SQLite FTS5), fused with reciprocal rank fusion.
+    def passages(self, q, k=12, per_paper=3, since=None, until=None, pool=200, mode="hybrid", rerank=True):
+        """Hybrid retrieval: dense (bge) + BM25 (SQLite FTS5), fused with reciprocal rank fusion, then
+        (optionally) the top RERANK_POOL candidates re-scored by a cross-encoder.
         mode = 'hybrid' | 'dense' | 'sparse' (the single-signal modes exist for evaluation)."""
         dense = []
         if mode in ("hybrid", "dense"):
@@ -113,13 +118,29 @@ class Index:
         for ranked in (dense, sparse):
             for rank, cid in enumerate(ranked):
                 fused[cid] = fused.get(cid, 0) + 1 / (60 + rank)
+        ranked = sorted(fused, key=fused.get, reverse=True)
+        if rerank and self.reranker is not None and ranked:
+            cands = [dict(self.con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone(), score=fused[cid])
+                     for cid in ranked[: self.rerank_pool]]
+            def doc(c):
+                head = self.papers[c["paper_key"]]["title"]
+                if self.section_in_rerank and c.get("section"):
+                    head += f" - {c['section']}"
+                return f"{head}. {c['text']}"
+            pairs = [(q, doc(c)) for c in cands]
+            scores = self.reranker.predict(pairs, batch_size=16, show_progress_bar=False)
+            for c, s in zip(cands, scores):
+                c["score"] = float(s)
+            candidates = sorted(cands, key=lambda c: c["score"], reverse=True)
+        else:
+            candidates = (dict(self.con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone(),
+                               score=fused[cid]) for cid in ranked)
         out, per = [], {}
-        for cid in sorted(fused, key=fused.get, reverse=True):
-            r = self.con.execute("SELECT * FROM chunks WHERE id=?", (cid,)).fetchone()
-            if per.get(r["paper_key"], 0) >= per_paper:
+        for c in candidates:
+            if per.get(c["paper_key"], 0) >= per_paper:
                 continue
-            per[r["paper_key"]] = per.get(r["paper_key"], 0) + 1
-            out.append(dict(r, score=fused[cid]))
+            per[c["paper_key"]] = per.get(c["paper_key"], 0) + 1
+            out.append(c)
             if len(out) >= k:
                 break
         return out
@@ -137,7 +158,7 @@ class Index:
                                        WHERE papers_fts MATCH ? ORDER BY bm25(papers_fts, 5.0, 1.0, 2.0)
                                        LIMIT 300""", (fq,)).fetchall()
             lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:200])
-        hits = self.passages(q, k=200, per_paper=1, since=since, until=until)
+        hits = self.passages(q, k=200, per_paper=1, since=since, until=until, rerank=False)
         lists.append([h["paper_key"] for h in hits])
         best_passage = {h["paper_key"]: h for h in hits}
         fused = {}
@@ -223,7 +244,8 @@ def cmd_search(ix, a):
     for i, (p, hit) in enumerate(ix.rank_papers(a.query, k=a.k or 10, since=a.since, until=a.until), 1):
         print(f"{i:2}. {paper_line(p)}\n     [{p['key']}]  {pdf_path(p)}")
         if hit:
-            print(wrap(f"p.{hit['page_start']}: {hit['text']}", 240))
+            where = f"p.{hit['page_start']}" + (f", {hit['section']}" if hit.get("section") else "")
+            print(wrap(f"{where}: {hit['text']}", 240))
         print()
 
 
@@ -235,8 +257,9 @@ def cmd_ask(ix, a):
     for i, h in enumerate(hits, 1):
         p = ix.papers[h["paper_key"]]
         pages = f"{h['page_start']}" + (f"-{h['page_end']}" if h["page_end"] != h["page_start"] else "")
+        section = f' section="{h["section"]}"' if h.get("section") else ""
         blocks.append(f'<source id="{i}" title="{p["title"]}" authors="{p["authors"]}" year="{p["year"]}" '
-                      f'pages="{pages}">\n{h["text"]}\n</source>')
+                      f'pages="{pages}"{section}>\n{h["text"]}\n</source>')
     user = "<sources>\n" + "\n".join(blocks) + f"\n</sources>\n\nQuestion: {a.query}"
     print(f"Retrieved {len(hits)} passages from {len({h['paper_key'] for h in hits})} papers. "
           f"Asking {MODELS[a.model]}...\n")
@@ -244,7 +267,8 @@ def cmd_ask(ix, a):
     print("\nSources:")
     for i, h in enumerate(hits, 1):
         p = ix.papers[h["paper_key"]]
-        print(f" [{i}] {p['title']} ({p['year']}), p.{h['page_start']}  [{p['key']}]")
+        sec = f", {h['section']}" if h.get("section") else ""
+        print(f" [{i}] {p['title']} ({p['year']}), p.{h['page_start']}{sec}  [{p['key']}]")
     print("\nOpen a paper with:  python ask.py open <key>")
 
 

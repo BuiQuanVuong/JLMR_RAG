@@ -24,7 +24,7 @@ import time
 from datetime import datetime
 
 from ask import Index
-from common import ROOT, utf8_console
+from common import RERANK_MODEL, RERANK_POOL, ROOT, utf8_console
 
 EVAL = ROOT / "eval"
 
@@ -58,10 +58,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--label", default="hybrid")
     ap.add_argument("--modes", action="store_true", help="also run dense-only and sparse-only")
+    ap.add_argument("--rerank", default=RERANK_MODEL,
+                    help=f"cross-encoder to use, or 'none' (default: {RERANK_MODEL})")
+    ap.add_argument("--pool", type=int, default=RERANK_POOL, help="candidates re-scored by the reranker")
+    ap.add_argument("--section-rerank", action="store_true",
+                    help="also show the reranker the passage's section heading (measured slightly worse)")
     a = ap.parse_args()
 
     qs = [json.loads(l) for l in open(EVAL / "questions.jsonl", encoding="utf-8") if l.strip()]
-    ix = Index()
+    ix = Index(rerank_model=None if a.rerank == "none" else a.rerank, rerank_pool=a.pool,
+               section_in_rerank=a.section_rerank)
 
     runs = [("hybrid", a.label)] + ([("dense", "dense-only"), ("sparse", "keyword-only")] if a.modes else [])
     summary = []

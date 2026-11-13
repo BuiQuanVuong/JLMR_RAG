@@ -40,7 +40,9 @@ Options: `--since YEAR`, `--until YEAR`, and `-k N` for the number of passages o
 ## How it works
 
 - **Passages:** each paper is split into overlapping 300-word passages that keep their page numbers. Bibliography passages are detected and excluded.
-- **Hybrid retrieval:** BM25 keyword search (SQLite FTS5) and semantic search (`BAAI/bge-small-en-v1.5` embeddings) are fused with reciprocal rank fusion. At most 3 passages come from any one paper, so answers draw on several papers.
+- **Hybrid retrieval:** BM25 keyword search (SQLite FTS5) and semantic search (`BAAI/bge-small-en-v1.5` embeddings) are fused with reciprocal rank fusion.
+- **Reranking:** the top 100 fused candidates are re-scored by a cross-encoder (`BAAI/bge-reranker-v2-m3`, on the GPU). It reads the title and the passage together. At most 3 passages come from any one paper, so answers draw on several papers.
+- **Section labels:** every passage knows its section (for example "Numerical Experiments / Empirical Size"). Labels come from the PDF's bookmarks or from detected numbered headings, and they're shown in answers and source lists. Re-run them with `python build_index.py --sections-only`.
 - **Answers:** Claude answers only from the retrieved passages and cites them as [n]. Each answer ends with the source list (paper, year, page, key) so you can open the PDF.
 
 ## Measuring retrieval quality
@@ -55,8 +57,15 @@ Options: `--since YEAR`, `--until YEAR`, and `-k N` for the number of passages o
 `eval\results_<name>.csv`, and each run is appended to `eval\history.csv`. Add `--modes` to also score
 keyword-only and meaning-only search. Run it before and after every retrieval change.
 
-Baseline (hybrid search, 2026-11-13): hard questions found the right paper 68% of the time, the right
-passage 50%, MRR 0.45. Standard and topic questions are near 100%, so they only catch regressions.
+| Setup (2026-11-13) | Hard: paper / passage / MRR | Standard passage / MRR |
+| --- | --- | --- |
+| Hybrid, no reranker | 68% / 50% / 0.45 | 85% / 0.94 |
+| + bge-reranker-v2-m3, 40 candidates | 72% / 57% / 0.49 | 97% / 1.00 |
+| + 100 candidates (current default) | 73% / 62% / 0.49 | 97% / 1.00 |
+
+Also tested: MiniLM and bge-reranker-base rerankers (both worse on hard questions), and section headings in
+the reranker input (slightly worse). Topic search stays at 100%. Standard and topic questions are near
+100%, so they only catch regressions.
 
 ## Adding new papers later
 
