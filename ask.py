@@ -9,6 +9,7 @@
   python ask.py similar v20/13-124                          papers similar to a given paper (local)
   python ask.py open v20/13-124                             open a paper's PDF
   python ask.py cite v20/13-124 v13/gretton12a --out refs.bib   BibTeX for papers
+  python ask.py topics [3 | 3.2] [--rising] [--for "question"]   browse the topic map (local)
   python ask.py chat                                        interactive mode with conversation memory
 
 Filters for search/ask/reading: --since YEAR, --until YEAR, -k N (number of passages/papers).
@@ -294,8 +295,11 @@ def wrap(s, n=300, indent="     "):
 
 
 def cmd_search(ix, a):
+    import topics
+    topic_of = topics.paper_topic_names(ix.con)
     for i, (p, hit) in enumerate(ix.rank_papers(a.query, k=a.k or 10, since=a.since, until=a.until), 1):
-        print(f"{i:2}. {paper_line(p)}\n     [{p['key']}]  {pdf_path(p)}")
+        tag = f"  [topic {topic_of[p['key']]}]" if p["key"] in topic_of else ""
+        print(f"{i:2}. {paper_line(p)}\n     [{p['key']}]  {pdf_path(p)}{tag}")
         if hit:
             where = f"p.{hit['page_start']}" + (f", {hit['section']}" if hit.get("section") else "")
             print(wrap(f"{where}: {hit['text']}", 240))
@@ -412,6 +416,7 @@ CHAT_HELP = """JMLR assistant with conversation memory. Type a question to get a
 ("which of those handles noise?", "how does [2] do it?") build on the earlier turns.
   /new (or /reset)   start a fresh conversation      /opus  /haiku   switch model (memory is kept)
   /search <query>   /reading <topic>   /compare <question>   /similar <key>   /open <key>
+  /topics [a | a.b | rising | for <question>]   browse the topic map
                      one-shot commands: they neither use nor add to the conversation memory
   /help   /quit"""
 
@@ -450,6 +455,13 @@ def cmd_chat(ix, a):
                 chat_ask(ix, sub, conv)
             elif cmd == "/open":
                 cmd_open(sub)
+            elif cmd == "/topics":
+                import topics
+                arg = sub.query
+                if arg.startswith("for "):
+                    topics.for_query(ix, arg[4:].strip())
+                else:
+                    topics.show("" if arg in ("", "rising") else arg, rising=arg == "rising")
             elif fn:
                 fn(ix, sub)
             else:
@@ -461,7 +473,8 @@ def cmd_chat(ix, a):
 def main():
     utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "chat"])
+    ap.add_argument("command", choices=["search", "ask", "reading", "compare", "similar", "open", "cite",
+                                        "topics", "chat"])
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("more_keys", nargs="*", help=argparse.SUPPRESS)   # cite: further paper keys
     ap.add_argument("--out", help="cite: write a UTF-8 .bib file instead of printing")
@@ -473,11 +486,19 @@ def main():
     ap.add_argument("--until", type=int, help="only papers up to this year")
     ap.add_argument("--no-rewrite", action="store_true",
                     help="don't rewrite the question into ML terminology with Claude before searching")
+    ap.add_argument("--rising", action="store_true", help="topics: subtopics that grew or shrank most")
+    ap.add_argument("--for", dest="for_query", metavar="QUESTION", help="topics: which subtopics a question falls into")
     a = ap.parse_args()
-    if a.command != "chat" and not a.query:
+    if a.command not in ("chat", "topics") and not a.query:
         ap.error(f"'{a.command}' needs a query")
     if a.command == "open":
         return cmd_open(a)
+    if a.command == "topics":
+        import topics
+        if a.for_query:   # needs retrieval, but not the reranker
+            return topics.for_query(Index(rerank_model=None, rewrite="off" if a.no_rewrite else REWRITE),
+                                    a.for_query)
+        return topics.show(a.query, rising=a.rising)
     if a.command == "cite":
         import cite
         return cite.run([a.query] + a.more_keys, a.out)

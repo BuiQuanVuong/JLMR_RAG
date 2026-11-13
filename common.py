@@ -31,7 +31,7 @@ PAPER_KEYS = DATA_DIR / "paper_keys.npy"
 EMB_MODEL = "BAAI/bge-small-en-v1.5"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"  # best of 3 tested with eval.py; None disables reranking
-RERANK_POOL = 100                          # hybrid candidates re-scored (40 = ~2 s faster, ~5 pts lower)
+RERANK_POOL = 40                           # with query rewriting, 40 beat 100 (hard 67% vs 65%) and is ~2.5 s faster
 REWRITE = "fuse"   # Claude query rewrite in ask.Index.passages (see rewrite.py); "off" = your words only
 
 ENV_FILE = Path(os.environ.get("JMLR_RAG_ENV_FILE", ROOT / ".env"))

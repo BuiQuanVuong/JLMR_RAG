@@ -35,6 +35,10 @@ python ask.py compare "..." --papers v13/gretton12a v24/21-1289                 
 python ask.py similar v20/13-124                          # papers like this one (free)
 python ask.py open v20/13-124                             # open the PDF
 python ask.py cite v20/13-124 v13/gretton12a --out refs.bib    # BibTeX (UTF-8; avoid PowerShell '>')
+python ask.py topics                                      # browse 18 research areas (free, local)
+python ask.py topics 14.1                                 # a subtopic: trend, top authors, central papers
+python ask.py topics --rising                             # what grew / faded, 2020-25 vs 2005-19
+python ask.py topics --for "your question"                # which subtopics a question falls into
 python ask.py chat                                        # interactive, remembers the conversation (see below)
 ```
 
@@ -54,9 +58,33 @@ search with your own words only (no API call before retrieval).
   still scores against your original question. `ask` and `compare` (paper selection) use it; `search` and
   `reading` don't (topic search is already at 100%). Rewrites are cached in `eval\rewrite_cache.json`; if
   the API is unreachable or there is no key, the original question is used.
-- **Reranking:** the top 100 fused candidates are re-scored by a cross-encoder (`BAAI/bge-reranker-v2-m3`, on the GPU). It reads the title and the passage together. At most 3 passages come from any one paper, so answers draw on several papers.
+- **Reranking:** the top 40 fused candidates are re-scored by a cross-encoder (`BAAI/bge-reranker-v2-m3`, on the GPU). It reads the title and the passage together. At most 3 passages come from any one paper, so answers draw on several papers.
 - **Section labels:** every passage knows its section (for example "Numerical Experiments / Empirical Size"). Labels come from the PDF's bookmarks or from detected numbered headings, and they're shown in answers and source lists. Re-run them with `python build_index.py --sections-only`.
 - **Answers:** Claude answers only from the retrieved passages and cites them as [n]. Each answer ends with the source list (paper, year, page, key) so you can open the PDF.
+
+## Topic map (`topics.py`)
+
+`python topics.py build` clusters every paper into **18 research areas** and **70 subtopics** (about 60
+papers each), names them with Claude Haiku (about $0.02, once), and draws `topic_map.png`. Browsing is free and
+local. It takes about 1 minute, plus 20 seconds for the map.
+
+- **What is clustered:** each paper's title+abstract embedding combined with the average of its passage
+  embeddings. This reflects the abstract and the full text.
+- **Choosing the granularity:** a sweep over 3 representations × Ward / k-means × 6–25 areas. Each
+  setting is scored on agreement (adjusted mutual information) with 182 papers on 18 of JMLR's own topic and
+  special-issue pages, silhouette, and size balance. The best setting with 8–25 areas, no area over 25% and
+  none under 15 papers won: combined / Ward / 18 areas (AMI 0.42, against 0.25–0.40 for most others).
+  Subtopic size was chosen the same way.
+- **Names:** subtopics are named first from their central papers and distinctive terms. Each area is then
+  named from all its subtopics, so the name covers everything inside it. Edit `data\topic_names.json` to
+  rename anything, then run `python topics.py map` to redraw the image.
+- **Secondary topics:** 912 papers (22%) are at least as close to another subtopic as to their own, so they
+  are listed there too.
+- **New papers:** `python topics.py assign` puts them in their nearest existing subtopic, so names stay
+  stable. Re-run `build` to re-cluster from scratch.
+
+`search` results show each paper's subtopic, and in `chat` the same views are available as
+`/topics [a | a.b | rising | for <question>]`.
 
 ## Measuring retrieval quality
 
@@ -66,7 +94,7 @@ search with your own words only (no API call before retrieval).
 - **60 hard:** plain words, none of the paper's terminology. This is the realistic case.
 - **20 topic:** short "find papers about" queries.
 
-`python eval.py --label <name>` scores the current system in about 12 minutes (5 with `--pool 40`). The
+`python eval.py --label <name>` scores the current system in about 8 minutes (12 with `--pool 100`). The
 query rewrites come from `eval\rewrite_cache.json`; fill it once with `python rewrite.py --eval` (about $0.05). Results go to
 `eval\results_<name>.csv`, and each run is appended to `eval\history.csv`. Add `--modes` to also score
 keyword-only and meaning-only search. Run it before and after every retrieval change.
@@ -76,8 +104,11 @@ keyword-only and meaning-only search. Run it before and after every retrieval ch
 | Hybrid, no reranker | 68% / 50% / 0.45 | 85% / 0.94 |
 | + bge-reranker-v2-m3, 40 candidates | 72% / 57% / 0.49 | 97% / 1.00 |
 | + 100 candidates (`--no-rewrite`) | 73% / 62% / 0.49 | 97% / 1.00 |
-| + Claude query rewrite "fuse", 40 candidates | 82% / 67% / 0.53 | 97% / 1.00 |
-| + Claude query rewrite "fuse", 100 candidates (current default) | 77% / 65% / 0.50 | 97% / 1.00 |
+| + Claude query rewrite "fuse", 40 candidates (**current default**, 3.5 s/query) | 82% / 67% / 0.53 | 97% / 1.00 |
+| + Claude query rewrite "fuse", 100 candidates (6 s/query) | 77% / 65% / 0.50 | 97% / 1.00 |
+
+With rewriting on, 40 candidates beat 100: the extra 60 seem to give the reranker more distractors to
+promote. The 40-candidate result was reproduced exactly on the merged code (2026-11-14).
 
 Query-rewrite variants, all with 40 candidates (`python eval.py --pool 40 --rewrite MODE`; hard paper / passage /
 MRR): `off` 72% / 57% / 0.49; `bm25` (rewrite for BM25 only) 80% / 62% / 0.54; `both` (rewrite replaces the

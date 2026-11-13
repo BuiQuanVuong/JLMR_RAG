@@ -32,7 +32,7 @@ This file explains how the parts fit together and why they are built the way the
                    ▼
   Index.passages():  dense search ×2 (original + rewrite) ─┐
                      BM25 search  ×2 (original + rewrite) ─┴─► RRF fusion
-                                                                │ top 100
+                                                                │ top 40
                                                                 ▼
                                        cross-encoder reranker (bge-reranker-v2-m3, GPU)
                                        scored against the ORIGINAL question
@@ -43,7 +43,13 @@ This file explains how the parts fit together and why they are built the way the
            ask ─────────► Claude (Haiku 5.5 default / Opus 5.5) ─► cited answer [n]
            compare ─────► per-paper evidence records (Haiku) ─► synthesis ─► [Pn.m]
            chat ────────► condense follow-up ─► retrieve ─► answer with history
-           search/similar/open/cite ──► local only, no API
+           search/similar/open/cite/topics ──► local only, no API
+
+
+ TOPIC MAP (topics.py, once, CPU)
+
+  paper vectors (abstract + mean passage) ─► sweep 3 representations × Ward/k-means × 6–25 areas,
+  scored against JMLR's own topic pages ─► 18 areas ─► 70 subtopics ─► Haiku names ─► topic_map.png
 ```
 
 ## 2. Files
@@ -59,6 +65,7 @@ This file explains how the parts fit together and why they are built the way the
 | `compare.py` | Two-stage comparison mode. |
 | `conversation.py` | Chat memory: turn history, follow-up condensation, history budget. |
 | `cite.py` | BibTeX export. |
+| `topics.py` | Topic map: granularity sweep, two-level clustering, naming, storage, map image, browse views. |
 | `make_eval.py` / `eval.py` | Builds the 140-question evaluation set; scores retrieval. |
 | `embed_test.py` | Compares candidate embedding models on a subset index. |
 
@@ -76,6 +83,8 @@ That is 6.3 GB. Paper `v24/22-1047` is missing because its PDF is empty on JMLR'
 | `chunks` | `id`, `paper_key`, `seq`, `page_start`, `page_end`, `is_ref`, `text`, `section` |
 | `chunks_fts` | FTS5 index over passage text (porter stemming), external content = `chunks` |
 | `papers_fts` | FTS5 index over title, authors and abstract |
+| `topics` | 18 areas (`3`) and 70 subtopics (`3.2`): name, description, size, distinctive terms, centroid |
+| `paper_topics` | paper → subtopic: rank 1 = primary, rank 2 = secondary (22% of papers), cosine score |
 
 **Embeddings** (`data/*.npy`): float16 matrices with id arrays alongside: `chunk_emb` (about 250k × 384)
 and `paper_emb` (4,138 × 384). They are loaded into RAM as float32 (about 400 MB). Search is a brute-force
@@ -110,7 +119,7 @@ out of search, so about 247,000 are searchable.
 | Dense search | The original and the rewrite are each embedded (with the bge query prefix), giving a top-200 list each. | 2 lists |
 | Keyword search | The original and the rewrite keywords each run as an FTS5 OR query (stopwords removed), ranked by BM25, top 200 each. | 2 lists |
 | Fusion | Reciprocal rank fusion, score = Σ 1/(60 + rank) over the lists. | k = 60 |
-| Reranking | The top 100 fused candidates are re-scored by `BAAI/bge-reranker-v2-m3` (fp16, GPU) on `(original question, "<title>. <passage>")`. | `RERANK_POOL = 100` |
+| Reranking | The top 40 fused candidates are re-scored by `BAAI/bge-reranker-v2-m3` (fp16, GPU) on `(original question, "<title>. <passage>")`. | `RERANK_POOL = 40` |
 | Diversity | At most 3 passages per paper, and the first 12 are kept. | `per_paper=3, k=12` |
 | Filters | `--since` / `--until` mask by publication year in both searches. | |
 
@@ -128,6 +137,9 @@ or the rewrite: title+abstract embedding similarity, BM25 over `papers_fts` (tit
 | Section heading kept out of the reranker input | Measured slightly worse (60% vs 62%) |
 | Rewrite fused with the original, not replacing it | At 40 candidates, right passage found: fuse 67%; HyDE 65%; keyword-only rewrite 62%; replacing the original 55% |
 | Reranker scores the original question | Your exact intent is the best judge; the rewrite only widens the candidate pool |
+| 40 reranker candidates, not 100 | With rewriting on, 40 beat 100 (82% / 67% / 0.53 against 77% / 65% / 0.50) and take 3.5 s per query instead of 6 s. The extra candidates seem to give the reranker more distractors to promote. |
+
+Cumulative effect on hard questions: right paper 68% → 82%, right passage 50% → 67%, MRR 0.45 → 0.53.
 
 ## 6. Generation
 
@@ -160,6 +172,18 @@ token use and approximate cost.
      don't get mixed up.
   4. A turn is recorded only after a non-empty, non-refused answer. `/new` clears the history.
 
+- **Topic map** (`topics.py`): paper vectors combine the title+abstract embedding with the mean of the
+  paper's passage embeddings. A sweep picks the granularity, scoring each setting on adjusted mutual
+  information against 182 papers from 18 of JMLR's own topic pages, plus silhouette and size balance. The
+  result is Ward clustering into 18 areas (AMI 0.42), then each area split into subtopics of about 60
+  papers (70 in total).
+  - Subtopics are named by Haiku from their central papers and distinctive terms (c-TF-IDF). Areas are
+    then named from their subtopics' names, so a name covers its whole area.
+  - A paper gets a secondary subtopic when it's at least as close to another subtopic's centroid.
+  - `--for` tallies the subtopics of the top 40 retrieved passages.
+  - `--rising` compares each subtopic's share of papers in 2020–25 with 2005–19.
+  - New papers join their nearest existing subtopic (`topics.py assign`), so names stay stable.
+
 API constraints honoured throughout: no sampling parameters, no assistant prefill, no disabled thinking
 on the 5.5 models, and the stop reason is checked before content is read.
 
@@ -172,7 +196,7 @@ Measured on an Intel Core Ultra 7 155U, 32 GB RAM and an NVIDIA MX570 with 4 GB 
 | RAM per process | About 1.9 GB (index + embedder) plus the reranker |
 | GPU memory | About 0.4 GB CUDA context + 0.1 GB embedder + about 1.2 GB reranker. Run one GPU process at a time. |
 | Startup | About 28 s (index, embedder, 2 GB reranker). `chat` pays it once per session. |
-| Per question | About 5–6 s of retrieval (most of it reranking 100 candidates; 40 candidates ≈ 3 s), plus the rewrite (≈ 4 s uncached), plus Claude's answer |
+| Per question | About 3.5 s of retrieval (40 reranked candidates), plus the rewrite (≈ 4 s uncached), plus Claude's answer |
 | Disk | Papers 6.3 GB, index about 1 GB, models about 3.5 GB in the Hugging Face cache |
 
 A local LLM was considered and rejected for now. Qwen3 8B doesn't fit in 4 GB of VRAM, and Qwen3 4B
@@ -202,7 +226,8 @@ scores to compare versions.
 
 | Setting | Where | Default |
 |---|---|---|
-| `RERANK_MODEL`, `RERANK_POOL` | `common.py` | `BAAI/bge-reranker-v2-m3`, 100 |
+| `RERANK_MODEL`, `RERANK_POOL` | `common.py` | `BAAI/bge-reranker-v2-m3`, 40 |
+| Topic names | `data/topic_names.json` | generated by `topics.py build`; edit freely, then `topics.py map` |
 | `REWRITE` | `common.py` | `"fuse"` (`"off"` disables; `--no-rewrite` on the CLI) |
 | `CHUNK_WORDS`, `CHUNK_OVERLAP` | `common.py` | 300, 50 (changing these requires a full rebuild and re-embed) |
 | `ANTHROPIC_API_KEY` | `.env` (gitignored) | required for `ask`, `reading`, `compare`, `chat` |
@@ -211,9 +236,13 @@ scores to compare versions.
 ## 10. Known limits and next steps
 
 - **Embedding recall:** on hard questions, the gold passage isn't among the top 200 fused candidates
-  about 23% of the time without rewriting, so the small embedder is the weakest link. `embed_test.py`
+  about 23% of the time without rewriting, so the small embedder is the weakest link. A better embedder
+  would also sharpen the topic map, which is built on the same vectors. `embed_test.py`
   compares bge-base-en-v1.5 and Qwen3-Embedding-0.6B on a subset before committing to a full re-embed
   (about 1.5 h or about 8 h).
+- **Topic map:** one area ("Supervised and Semi-Supervised Learning") is a loose mix. JMLR's
+  learning-theory papers spread across several areas (only 15% in the most common one), because theory
+  papers cluster by what they analyse rather than by being theory.
 - **Math:** formulas are approximate in the extracted text. Check them in the PDF.
 - **Chat:** memory is per session only. A chat follow-up is condensed, then rewritten again by
   `rewrite.py`; whether that double rewrite helps hasn't been measured yet.
