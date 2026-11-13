@@ -52,9 +52,8 @@ search with your own words only (no API call before retrieval).
   be" becomes "kernel bandwidth selection, Gaussian/RBF kernel, median heuristic". Four ranked lists are fused:
   dense and BM25 for the original question, dense for the rewrite, BM25 for rewrite + keywords. The reranker
   still scores against your original question. `ask` and `compare` (paper selection) use it; `search` and
-  `reading` don't (topic search is already at 100%). Rewrites are cached in `eval
-ewrite_cache.json`; if the
-  API is unreachable or there is no key, the original question is used.
+  `reading` don't (topic search is already at 100%). Rewrites are cached in `eval\rewrite_cache.json`; if
+  the API is unreachable or there is no key, the original question is used.
 - **Reranking:** the top 100 fused candidates are re-scored by a cross-encoder (`BAAI/bge-reranker-v2-m3`, on the GPU). It reads the title and the passage together. At most 3 passages come from any one paper, so answers draw on several papers.
 - **Section labels:** every passage knows its section (for example "Numerical Experiments / Empirical Size"). Labels come from the PDF's bookmarks or from detected numbered headings, and they're shown in answers and source lists. Re-run them with `python build_index.py --sections-only`.
 - **Answers:** Claude answers only from the retrieved passages and cites them as [n]. Each answer ends with the source list (paper, year, page, key) so you can open the PDF.
@@ -67,7 +66,8 @@ ewrite_cache.json`; if the
 - **60 hard:** plain words, none of the paper's terminology. This is the realistic case.
 - **20 topic:** short "find papers about" queries.
 
-`python eval.py --label <name>` scores the current system for free in about 3 minutes. Results go to
+`python eval.py --label <name>` scores the current system in about 12 minutes (5 with `--pool 40`). The
+query rewrites come from `eval\rewrite_cache.json`; fill it once with `python rewrite.py --eval` (about $0.05). Results go to
 `eval\results_<name>.csv`, and each run is appended to `eval\history.csv`. Add `--modes` to also score
 keyword-only and meaning-only search. Run it before and after every retrieval change.
 
@@ -75,7 +75,14 @@ keyword-only and meaning-only search. Run it before and after every retrieval ch
 | --- | --- | --- |
 | Hybrid, no reranker | 68% / 50% / 0.45 | 85% / 0.94 |
 | + bge-reranker-v2-m3, 40 candidates | 72% / 57% / 0.49 | 97% / 1.00 |
-| + 100 candidates (current default) | 73% / 62% / 0.49 | 97% / 1.00 |
+| + 100 candidates (`--no-rewrite`) | 73% / 62% / 0.49 | 97% / 1.00 |
+| + Claude query rewrite "fuse", 40 candidates | 82% / 67% / 0.53 | 97% / 1.00 |
+| + Claude query rewrite "fuse", 100 candidates (current default) | 77% / 65% / 0.50 | 97% / 1.00 |
+
+Query-rewrite variants, all with 40 candidates (`python eval.py --pool 40 --rewrite MODE`; hard paper / passage /
+MRR): `off` 72% / 57% / 0.49; `bm25` (rewrite for BM25 only) 80% / 62% / 0.54; `both` (rewrite replaces the
+question for BM25 and dense) 72% / 55% / 0.51, and standard passage drops to 90%; `fuse` 82% / 67% / 0.53;
+`hyde` (original + hypothetical passage for dense) 77% / 65% / 0.51. Topic stays at 100% in all of them.
 
 Also tested: MiniLM and bge-reranker-base rerankers (both worse on hard questions), and section headings in
 the reranker input (slightly worse). Topic search stays at 100%. Standard and topic questions are near
