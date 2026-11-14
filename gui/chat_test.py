@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 import ask  # noqa: E402
 import conversation  # noqa: E402
 from common import connect  # noqa: E402
-from gui.chat_render import linkify_citations, oneshot_markdown, source_from_label  # noqa: E402
+from gui.chat_render import fix_lists, linkify_citations, oneshot_markdown, source_from_label  # noqa: E402
 
 KEY = "v13/gretton12a"
 ANSWER = ("## Answer\n\nThe bandwidth is set by the **median heuristic** [1], see also [1, 2] and [9].\n\n"
@@ -79,6 +79,12 @@ def test_linkify_citations():
     assert "[9]" in html                                       # out of range: left alone
     assert "`code [1]`" in html                                # inline code: left alone
     assert linkify_citations("see [link](http://x) [1]", "a", sources).startswith("see [link](http://x)")
+
+
+def test_fix_lists():
+    assert fix_lists("**Head**\n- a\n- b") == "**Head**\n\n- a\n- b"
+    assert fix_lists("text\n\n1. a\n2. b") == "text\n\n1. a\n2. b"
+    assert fix_lists("```\nx\n- not a list\n```") == "```\nx\n- not a list\n```"
 
 
 def test_source_from_label():

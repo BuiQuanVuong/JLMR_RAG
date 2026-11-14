@@ -18,7 +18,7 @@ import ask
 import ui as term_ui
 from conversation import Conversation
 from gui import state
-from gui.chat_render import (linkify_citations, oneshot_markdown, source_from_hit, source_from_label,
+from gui.chat_render import (fix_lists, linkify_citations, oneshot_markdown, source_from_hit, source_from_label,
                              source_tooltip)
 from gui.pdfview import show_pdf
 
@@ -107,6 +107,7 @@ class Answer:
         self.status.visible = bool(text)
 
     def set_text(self, text, linkify=True):
+        text = fix_lists(text)
         self.md.set_content(linkify_citations(text, self.id, self.sources) if linkify else text)
 
     def footnote(self, text):

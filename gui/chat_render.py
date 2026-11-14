@@ -48,6 +48,24 @@ _CITE_GROUP = re.compile(r"\[(\d{1,3}(?:\s*(?:,|;|-|–)\s*\d{1,3})*)\](?!\()")
 _NUM = re.compile(r"\d{1,3}")
 
 
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+
+
+def fix_lists(md):
+    """markdown2 only starts a list after a blank line, but Claude often writes '**Heading**\\n- item'.
+    Insert the blank line (outside code fences) so such lists render as lists."""
+    out, prev, fence = [], "", False
+    for line in md.split("\n"):
+        if line.lstrip().startswith("```"):
+            fence = not fence
+        elif (not fence and _LIST_ITEM.match(line) and prev.strip() and not _LIST_ITEM.match(prev)
+              and not prev.startswith((" ", "\t")) and not prev.lstrip().startswith("|")):
+            out.append("")
+        out.append(line)
+        prev = line
+    return "\n".join(out)
+
+
 def linkify_citations(md, answer_id, sources):
     """[n], [1, 3], [2-4] -> clickable links (class "cite") that the page turns into 'open the PDF at this
     source's page'. Numbers outside the source list and anything inside code are left alone."""
