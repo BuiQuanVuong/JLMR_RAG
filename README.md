@@ -202,7 +202,13 @@ a little more than a fresh question, because the history is sent again (Haiku: a
 
 ## Adding new papers later
 
-Re-run the downloader (`jmlr_dl.py`), then `python build_index.py` and `python embed.py`. All three skip work they've already done.
+`jmlr-rag update` does it in one go:
+1. downloads what JMLR has published since the last run, at the same polite pace;
+2. extracts text and refreshes the keyword index;
+3. embeds the new passages;
+4. places the new papers in the topic map.
+
+It then lists the new papers, and appends a summary to `data\update_log.txt`. With nothing new, a run takes about 3 minutes. `jmlr-rag update --check` only compares JMLR's listing with your index, without downloading anything. Close the full-screen app first, so it doesn't compete with the embedding step for the GPU.
 
 ## Known gaps
 

@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 BASE = "https://www.jmlr.org/papers/"
-OUT = sys.argv[1]
+OUT = sys.argv[1] if __name__ == "__main__" else None   # importable (update.py reuses parse_volume)
 UA = "Mozilla/5.0 (personal archive script)"
 WORKERS = 3
 lock = threading.Lock()

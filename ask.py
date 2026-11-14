@@ -10,6 +10,7 @@
   python ask.py open v20/13-124                             open a paper's PDF
   python ask.py cite v20/13-124 v13/gretton12a --out refs.bib   BibTeX for papers
   python ask.py topics [3 | 3.2] [--rising] [--for "question"]   browse the topic map (local)
+  python ask.py update [--check]                            fetch and index papers JMLR published since
   python ask.py chat                                        interactive mode with conversation memory
 
 Filters for search/ask/reading: --since YEAR, --until YEAR, -k N (number of passages/papers).
@@ -639,7 +640,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default=None,
                     choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "topics", "chat",
-                             "app"],
+                             "app", "update"],
                     help="default: the full-screen app in a terminal, otherwise chat")
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("more_keys", nargs="*", help=argparse.SUPPRESS)   # cite: further paper keys
@@ -657,10 +658,14 @@ def main():
     ap.add_argument("--resume", nargs="?", const="last", metavar="N",
                     help="chat: continue a saved conversation (default: the most recent)")
     ap.add_argument("--rising", action="store_true", help="topics: subtopics that grew or shrank most")
+    ap.add_argument("--check", action="store_true", help="update: only report what JMLR has that isn't indexed")
     ap.add_argument("--for", dest="for_query", metavar="QUESTION", help="topics: which subtopics a question falls into")
     a = ap.parse_args()
     if a.command is None:
         a.command = "app" if (sys.stdin.isatty() and sys.stdout.isatty()) else "chat"
+    if a.command == "update":
+        import update
+        return update.run(check_only=a.check)
     if a.command == "app":
         try:
             import tui

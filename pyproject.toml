@@ -15,4 +15,4 @@ requires-python = ">=3.11"
 jmlr-rag = "ask:main"
 
 [tool.setuptools]
-py-modules = ["ask", "boolq", "common", "compare", "conversation", "cite", "rewrite", "topics", "ui", "tui"]
+py-modules = ["ask", "boolq", "jmlr_dl", "update", "common", "compare", "conversation", "cite", "rewrite", "topics", "ui", "tui"]
