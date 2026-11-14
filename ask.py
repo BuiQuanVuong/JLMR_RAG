@@ -168,11 +168,20 @@ class Index:
             fq = self.fts_query(text)
             if not fq:
                 continue
-            only = " AND c.paper_key IN (SELECT k FROM allowed_keys)" if allowed is not None else ""
-            rows = self.con.execute(f"""SELECT c.id, p.year FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
-                                        JOIN papers p ON p.key = c.paper_key
-                                        WHERE chunks_fts MATCH ? AND c.is_ref = 0{only}
-                                        ORDER BY bm25(chunks_fts) LIMIT ?""", (fq, pool * 3)).fetchall()
+            if allowed is None:
+                # rank inside the FTS index first, then join only those rows: an expanded rewrite query can
+                # match nearly every passage, and joining all of them before sorting took ~1 s per list
+                rows = self.con.execute("""SELECT c.id, p.year FROM
+                                             (SELECT rowid, bm25(chunks_fts) AS s FROM chunks_fts
+                                              WHERE chunks_fts MATCH ? ORDER BY s LIMIT ?) f
+                                           JOIN chunks c ON c.id = f.rowid JOIN papers p ON p.key = c.paper_key
+                                           WHERE c.is_ref = 0 ORDER BY f.s""", (fq, pool * 3)).fetchall()
+            else:   # filtered: join first so the top results all come from allowed papers
+                rows = self.con.execute("""SELECT c.id, p.year FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid
+                                           JOIN papers p ON p.key = c.paper_key
+                                           WHERE chunks_fts MATCH ? AND c.is_ref = 0
+                                             AND c.paper_key IN (SELECT k FROM allowed_keys)
+                                           ORDER BY bm25(chunks_fts) LIMIT ?""", (fq, pool * 3)).fetchall()
             lists.append([r[0] for r in rows if self.year_ok(r[1] or 0, since, until)][:pool])
 
         fused = {}
