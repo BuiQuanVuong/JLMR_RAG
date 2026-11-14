@@ -14,6 +14,10 @@ import types
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from tests.fixture import use_fixture  # noqa: E402
+
+use_fixture()                          # JMLR_TEST_FIXTURE=1: synthetic index (must precede importing common)
+
 import ask  # noqa: E402
 import conversation  # noqa: E402
 import tui  # noqa: E402
