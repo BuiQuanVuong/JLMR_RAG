@@ -640,7 +640,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default=None,
                     choices=["search", "ask", "reading", "compare", "similar", "open", "cite", "topics", "chat",
-                             "app", "update"],
+                             "app", "update", "gui"],
                     help="default: the full-screen app in a terminal, otherwise chat")
     ap.add_argument("query", nargs="?", default="")
     ap.add_argument("more_keys", nargs="*", help=argparse.SUPPRESS)   # cite: further paper keys
@@ -659,6 +659,7 @@ def main():
                     help="chat: continue a saved conversation (default: the most recent)")
     ap.add_argument("--rising", action="store_true", help="topics: subtopics that grew or shrank most")
     ap.add_argument("--check", action="store_true", help="update: only report what JMLR has that isn't indexed")
+    ap.add_argument("--browser", action="store_true", help="gui: serve in the web browser instead of a window")
     ap.add_argument("--for", dest="for_query", metavar="QUESTION", help="topics: which subtopics a question falls into")
     a = ap.parse_args()
     if a.command is None:
@@ -666,6 +667,9 @@ def main():
     if a.command == "update":
         import update
         return update.run(check_only=a.check)
+    if a.command == "gui":
+        from gui import app as gui_app
+        return gui_app.run(native=not a.browser, no_rewrite=a.no_rewrite)
     if a.command == "app":
         try:
             import tui
