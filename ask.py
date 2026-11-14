@@ -21,6 +21,8 @@ import os
 import re
 import sys
 import textwrap
+import threading
+from functools import wraps
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")   # the embedding model is cached by embed.py
 
@@ -62,7 +64,20 @@ if important sub-areas are missing from the candidates, say so briefly."""
 REWRITE_MODES = ("off", "bm25", "both", "fuse", "hyde", "multi")
 
 
+def _serialized(method):
+    """Run an Index method under the index's lock. The desktop app searches from several threads (chat,
+    search, paper pages) through ONE SQLite connection and a shared temp table (allowed_keys), so retrieval
+    calls must not interleave. Re-entrant: rank_papers() calls passages()."""
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Index:
+    _lock = threading.RLock()     # one lock for the process (there is one Index per app)
+
     def __init__(self, rerank_model=RERANK_MODEL, rerank_pool=RERANK_POOL, section_in_rerank=False,
                  rewrite=REWRITE, rewrite_search=False):
         # section_in_rerank=True measured slightly worse (hard passage@12 60% vs 62%), so it is off
@@ -138,6 +153,7 @@ class Index:
         self.con.execute("DELETE FROM allowed_keys")
         self.con.executemany("INSERT INTO allowed_keys VALUES(?)", [(k,) for k in allowed])
 
+    @_serialized
     def passages(self, q, k=12, per_paper=3, since=None, until=None, pool=200, mode="hybrid", rerank=True,
                  rewrite=None, allowed=None):
         """Hybrid retrieval: dense (bge) + BM25 (SQLite FTS5), fused with reciprocal rank fusion, then
@@ -216,6 +232,7 @@ class Index:
                 break
         return out
 
+    @_serialized
     def rank_papers(self, q, k=10, since=None, until=None, allowed=None):
         """Paper ranking: fuse title/abstract similarity, abstract keyword match and best passage hits.
         With rewrite_search, the Claude rewrite adds its own title/abstract lists and passage lists.
@@ -254,6 +271,7 @@ class Index:
             top += sorted(rest, key=lambda key: -(self.papers[key]["year"] or 0))
         return [(self.papers[key], best_passage.get(key)) for key in top[:k]]
 
+    @_serialized
     def similar(self, key, k=10):
         idx = np.where(self.paper_keys == key)[0]
         if not len(idx):
