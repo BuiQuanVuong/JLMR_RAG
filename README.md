@@ -200,6 +200,22 @@ The prompt shows how many turns are remembered. `/search`, `/reading`, `/compare
 are one-shot: they neither use nor add to the memory. `python ask.py ask` has no memory. A follow-up costs
 a little more than a fresh question, because the history is sent again (Haiku: about $0.002–0.003).
 
+## Measuring answer quality (`citecheck.py`)
+
+`python citecheck.py` has Haiku answer 30 eval questions, then Claude Opus 5.5 audits every claim against
+the passages it cites, labelling each supported, partial, unsupported or uncited. It costs about $2.50 and
+stops at the `--budget` limit. `--opus` audits Opus answers instead.
+
+| Haiku 5.5 answers, 2026-11-14 | Result |
+| --- | --- |
+| Claims audited | 438 in 30 answers |
+| Supported / partial / unsupported / uncited | 85% / 6% / 1% / 8% |
+| Citation precision (cited claims at least partly supported) | 99% |
+
+The few errors were a definition cited to the wrong source, proof details, and over-generalised
+summaries. Uncited claims are mostly Haiku's own inferences, occasionally a derived formula, so check
+numbers, formulas and attributions on the cited page. Details are in `eval\citecheck_haiku.jsonl`.
+
 ## Adding new papers later
 
 `jmlr-rag update` does it in one go:
