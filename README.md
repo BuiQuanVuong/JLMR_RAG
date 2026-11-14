@@ -25,7 +25,22 @@ cd D:\Academic_Papers\jmlr_rag
 
 ## Usage
 
-**Full-screen app:** `jmlr-rag` with no arguments, in a terminal, opens a Textual app (`tui.py`) with four
+**Desktop app (`jmlr-rag gui`):** opens a desktop window, built with NiceGUI and shown through pywebview
+using Windows' Edge WebView2. `jmlr-rag gui --browser` serves the same app at http://127.0.0.1:8765 in your
+browser instead. The index loads once in the background, in about 25 seconds.
+
+| Page | What it does |
+|---|---|
+| **Chat** | Conversation with memory. Answers stream as formatted Markdown; each [n] is a clickable pill that opens the PDF inside the app at the cited page; a collapsible sources list sits under each answer. `/compare` and `/reading` work in the input box. |
+| **Search** | Ranked papers with topic chips, highlighted snippets, and "Open PDF at p. N" and BibTeX buttons. Supports Scholar syntax with per-term counts. Year and research-area filters. |
+| **Paper page** | Abstract, topic, a clickable section outline that opens the PDF at each section, similar papers, BibTeX. |
+| **Topic map** | Interactive map of all papers by area: zoom, hover, click a paper. Selecting a topic shows papers per year, top authors and central papers; there is also a year filter and a rising/fading view. |
+| **Recent advances** | Momentum charts and one card per subtopic: where it's heading, 3-5 advances with links to the 2023-25 papers, sparkline, top authors. Regenerate with `python advances.py` (about $0.06 with Haiku). |
+| **Sessions** | Saved conversations; Resume reopens one in Chat. |
+
+Tests (no GPU, no API): `python -m pytest gui/ -p nicegui.testing.user_plugin -o asyncio_mode=auto -o main_file=`.
+
+**Full-screen terminal app:** `jmlr-rag` with no arguments, in a terminal, opens a Textual app (`tui.py`) with four
 tabs:
 - **F1 Chat:** conversation with memory and streaming Markdown answers. A sources pane lists the cited
   passages, and Enter on one opens its PDF. `/compare <question>` and `/reading <topic>` work here too.

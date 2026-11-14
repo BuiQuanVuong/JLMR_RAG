@@ -66,6 +66,8 @@ This file explains how the parts fit together and why they are built the way the
 | `conversation.py` | Chat memory: turn history, follow-up condensation, history budget. |
 | `cite.py` | BibTeX export. |
 | `topics.py` | Topic map: granularity sweep, two-level clustering, naming, storage, map image, browse views. |
+| `gui/` | Desktop app (NiceGUI, native window via pywebview). `app.py` routes; `frame.py` header and navigation; `state.py` (the index loaded once in a background thread, model, conversation); `pdfview.py` (in-app PDF at a page, PDFs served from `/pdfs/`); one module per page: `chat`, `sessions`, `search` (+ `search_data`, `search_cards`), `paper`, `topicmap` (+ `topicmap_data`; 2D coordinates cached in `data/topic_coords.json`), `advances`. Tests are `gui/*_test.py`. |
+| `advances.py` | Generates `data/advances.json`: per-subtopic momentum stats and Claude Haiku "recent advances" summaries, with cited keys validated against the subtopic's 2023-25 papers. |
 | `tui.py` | Full-screen Textual app (Chat / Search / Topics / Sessions). Retrieval and Claude calls run in worker threads and stream into Markdown widgets. |
 | `ui.py` | Terminal rendering for the line interface: Rich Markdown streaming, spinner, prompt_toolkit input. |
 | `tests/test_tui.py` | Headless app test with a fake index and a fake Claude stream. |
