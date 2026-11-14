@@ -1,3 +1,5 @@
+[![tests](https://github.com/BuiQuanVuong/JLMR_RAG/actions/workflows/ci.yml/badge.svg)](https://github.com/BuiQuanVuong/JLMR_RAG/actions/workflows/ci.yml)
+
 # JMLR RAG
 
 A local research assistant for the **Journal of Machine Learning Research** (JMLR, about 4,100 open-access
@@ -233,8 +235,14 @@ python tests/test_tui.py        # terminal app
 python tests/test_boolq.py      # Scholar-style queries
 ```
 
-None of these use the GPU or the API. They use a stand-in index and a fake Claude stream. The GUI and
-query tests read the local database, so build the collection first.
+None of these use the GPU or the API; Claude calls are faked. By default they read your local index. With
+`JMLR_TEST_FIXTURE=1` set, they generate and use a small synthetic dataset instead (`tests/fixture.py`), so
+they also run on a machine without the collection.
+
+**Continuous integration:** GitHub Actions (`.github/workflows/ci.yml`) runs all three suites on Linux and
+Windows on every push and pull request, using the synthetic dataset. It downloads nothing from JMLR, needs
+no GPU and makes no API calls. You don't need to run the tests locally before committing, since CI checks
+every push. To keep `main` green, require the "tests" check in the repository's branch protection settings.
 
 ## Limitations
 
