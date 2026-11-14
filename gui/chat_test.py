@@ -132,7 +132,8 @@ async def idle(timeout=10):
 
 def markdowns(user):
     from nicegui import ui
-    return [m.content for m in user.find(ui.markdown).elements]
+    # find() returns a *set*: sort by element id (creation order) so [-1] is really the latest answer
+    return [m.content for m in sorted(user.find(ui.markdown).elements, key=lambda m: m.id)]
 
 
 @pytest.mark.asyncio
