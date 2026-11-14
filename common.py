@@ -18,9 +18,22 @@ for _name in ("torch.distributed.elastic.multiprocessing.redirects", "sentence_t
     logging.getLogger(_name).setLevel(logging.ERROR)
 
 ROOT = Path(__file__).resolve().parent
-# Overridable so a git worktree (or another checkout) can use the shared papers, index and key:
-#   JMLR_PAPERS_DIR, JMLR_RAG_DATA, JMLR_RAG_ENV_FILE
-JMLR_DIR = Path(os.environ.get("JMLR_PAPERS_DIR", ROOT.parent / "JMLR"))   # downloaded papers
+
+
+def _default_papers_dir():
+    """Where the downloaded papers live: ./papers inside the project (the default for new setups), or a
+    sibling ../JMLR folder if one already exists (older setups)."""
+    inside, sibling = ROOT / "papers", ROOT.parent / "JMLR"
+    if not inside.exists() and (sibling / "catalog.csv").exists():
+        return sibling
+    return inside
+
+
+# All three locations can be overridden with environment variables (or lines in .env):
+#   JMLR_PAPERS_DIR   downloaded PDFs + catalog       (default: ./papers)
+#   JMLR_RAG_DATA     index, embeddings, sessions     (default: ./data)
+#   JMLR_RAG_ENV_FILE the file holding the API key    (default: ./.env)
+JMLR_DIR = Path(os.environ.get("JMLR_PAPERS_DIR", _default_papers_dir()))
 DATA_DIR = Path(os.environ.get("JMLR_RAG_DATA", ROOT / "data"))
 DB_PATH = DATA_DIR / "jmlr.db"
 CHUNK_EMB = DATA_DIR / "chunk_emb.npy"    # float16 [n_chunks, dim], row i <-> CHUNK_IDS[i]
@@ -36,6 +49,44 @@ REWRITE = "fuse"   # Claude query rewrite in ask.Index.passages (see rewrite.py)
 
 ENV_FILE = Path(os.environ.get("JMLR_RAG_ENV_FILE", ROOT / ".env"))
 PLACEHOLDER = "paste-your-key-here"
+
+_INFO = None
+
+
+def collection_info():
+    """(number of indexed papers, first year, last year) of the local collection, for labels and time
+    windows. Read once from the index; sensible fallbacks before anything has been indexed."""
+    global _INFO
+    if _INFO is None:
+        _INFO = (0, 2000, 2025)
+        if DB_PATH.exists():
+            try:
+                con = sqlite3.connect(DB_PATH)
+                n, lo, hi = con.execute("SELECT COUNT(*), MIN(year), MAX(year) FROM papers "
+                                        "WHERE status='done'").fetchone()
+                con.close()
+                if n:
+                    _INFO = (n, lo or 2000, hi or 2025)
+            except sqlite3.Error:
+                pass
+    return _INFO
+
+
+def collection_label():
+    """e.g. '4,138 JMLR papers, 2000-2025' (or a hint when nothing is indexed yet)."""
+    n, lo, hi = collection_info()
+    return f"{n:,} JMLR papers, {lo}-{hi}" if n else "no papers indexed yet"
+
+
+def open_path(path):
+    """Open a file with the system's default application (PDF reader), on Windows, macOS or Linux."""
+    path = str(path)
+    if sys.platform.startswith("win"):
+        os.startfile(path)
+    else:
+        import subprocess
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", path],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def load_env():

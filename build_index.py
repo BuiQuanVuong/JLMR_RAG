@@ -187,13 +187,17 @@ def update_sections(con, workers=8):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="Extract text, passages and section labels from the downloaded PDFs "
+                                 "into the SQLite index (incremental: only new PDFs are processed).")
+    ap.add_argument("--sections-only", action="store_true",
+                    help="only (re)compute section labels on the existing index (chunk ids unchanged)")
+    ap.add_argument("--db", help="--sections-only: work on this database file instead (e.g. a copy)")
+    ap.add_argument("--workers", type=int, default=8, help="--sections-only: parallel PDF readers (default 8)")
+    a = ap.parse_args()
     utf8_console()
-    if "--sections-only" in sys.argv:
-        # optional: --db PATH (work on a copy), --workers N (default 8)
-        args = sys.argv
-        db = args[args.index("--db") + 1] if "--db" in args else None
-        workers = int(args[args.index("--workers") + 1]) if "--workers" in args else 8
-        return update_sections(connect(db), workers)
+    if a.sections_only:
+        return update_sections(connect(a.db), a.workers)
     con = connect()
     catalog = JMLR_DIR / "catalog.csv"
     rows = list(csv.DictReader(open(catalog, encoding="utf-8-sig")))

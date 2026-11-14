@@ -30,12 +30,12 @@ from textual.widgets.option_list import Option
 import ask
 import topics
 import ui
-from common import JMLR_DIR, REWRITE, connect
+from common import JMLR_DIR, REWRITE, collection_label, connect, open_path
 from conversation import Conversation, list_sessions
 
 WELCOME = """# JMLR research assistant
 
-Ask a question about the 4,138 JMLR papers (2000-2025). Follow-ups build on the conversation, which is saved
+Ask a question about the {label}. Follow-ups build on the conversation, which is saved
 automatically. **F2** search, **F3** topic map, **F4** saved sessions, **Ctrl+N** new conversation,
 **Ctrl+O** switch between Claude Haiku 5.5 and Opus 5.5.
 
@@ -60,7 +60,7 @@ def open_pdf(key):
     con = connect()
     p = con.execute("SELECT pdf_path FROM papers WHERE key=?", (key,)).fetchone()
     if p:
-        os.startfile(str(JMLR_DIR / p["pdf_path"]))
+        open_path(JMLR_DIR / p["pdf_path"])
     return p is not None
 
 
@@ -108,7 +108,7 @@ class ResearchApp(App):
             with TabPane("Chat", id="chat"):
                 with Horizontal(id="chat-body"):
                     with VerticalScroll(id="log"):
-                        yield Markdown(WELCOME)
+                        yield Markdown(WELCOME.format(label=collection_label()))
                     with Vertical(id="side"):
                         yield Static("Sources (Enter opens the PDF)", classes="pane-title")
                         yield OptionList(id="sources")
@@ -196,7 +196,7 @@ class ResearchApp(App):
         log = self.query_one("#log", VerticalScroll)
         log.remove_children()
         if not conv.turns:
-            log.mount(Markdown(WELCOME))
+            log.mount(Markdown(WELCOME.format(label=collection_label())))
         for t in conv.turns:
             log.mount(Static(Text(f"You: {t.question}"), classes="you"))
             log.mount(Markdown(t.answer, classes="answer"))

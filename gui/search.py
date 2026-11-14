@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from nicegui import run, ui
 
+from common import collection_info
 from gui import search_data as sd
 from gui import state
 from gui.search_cards import add_css, result_card
@@ -35,7 +36,7 @@ def page(q=""):
     # ------------------------------------------------------------ search box
     with ui.card().classes("w-full p-5 gap-3 rounded-2xl border border-gray-200 shadow-none"):
         with ui.row().classes("w-full items-center no-wrap gap-3"):
-            box = ui.input(placeholder="Search 4,138 JMLR papers - a topic, a question, or a Scholar query",
+            box = ui.input(placeholder=f"Search {collection_info()[0]:,} JMLR papers - a topic, a question, or a Scholar query",
                            value=st["q"]).props('outlined rounded clearable autofocus input-class="text-base"') \
                 .classes("grow")
             with box.add_slot("prepend"):

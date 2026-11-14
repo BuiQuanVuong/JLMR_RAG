@@ -1,0 +1,5 @@
+#!/bin/sh
+# macOS / Linux launcher: runs jmlr-rag from this project's .venv without activating it.
+# Add this bin folder to your PATH, e.g.  export PATH="/path/to/project/bin:$PATH"
+PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$PROJECT/.venv/bin/jmlr-rag" "$@"

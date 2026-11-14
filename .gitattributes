@@ -1,0 +1,3 @@
+# shell scripts must keep Unix line endings (a CR breaks the #! line on macOS/Linux)
+bin/jmlr-rag text eol=lf
+*.sh text eol=lf

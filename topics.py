@@ -28,7 +28,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-from common import CHUNK_EMB, CHUNK_IDS, DATA_DIR, JMLR_DIR, PAPER_EMB, PAPER_KEYS, ROOT, connect, utf8_console
+from common import (CHUNK_EMB, CHUNK_IDS, DATA_DIR, JMLR_DIR, PAPER_EMB, PAPER_KEYS, ROOT, collection_info, connect,
+                    utf8_console)
 
 NAMES_FILE = DATA_DIR / "topic_names.json"
 META_FILE = DATA_DIR / "topic_meta.json"
@@ -41,7 +42,8 @@ SUB_SIZES = [30, 40, 60]                        # target papers per subtopic (le
 MIN_SIZE = 15                                   # smallest cluster worth showing
 SECONDARY_MARGIN = 0.0                          # 2nd subtopic only if at least as close as the paper's own
                                                 # (22% of papers; a 0.03 margin gave 82%, too many to mean much)
-PERIODS = [(2000, 2004), (2005, 2009), (2010, 2014), (2015, 2019), (2020, 2025)]
+# trend periods; the last one runs to the newest year in the index (so new volumes are included)
+PERIODS = [(2000, 2004), (2005, 2009), (2010, 2014), (2015, 2019), (2020, max(2020, collection_info()[2]))]
 
 # JMLR topic pages used as an external check; event-based special issues are not topics
 SKIP_GROUPS = {"COLT2005", "colt02", "icml01", "chervonenkis15"}
@@ -79,8 +81,31 @@ def representations(con):
     return keys, {"abstract": norm(abstract), "fulltext": full, "combined": norm(norm(abstract) + full)}
 
 
+def fetch_reference_pages():
+    """Download JMLR's topic / special-issue pages (about 24 small pages, one per second) into
+    <papers>/topic_pages, if they aren't there yet. They give the granularity sweep an external check."""
+    folder = JMLR_DIR / "topic_pages"
+    if folder.exists() and any(folder.glob("*.html")):
+        return
+    try:
+        import jmlr_dl
+        index = JMLR_DIR / "index.html"
+        page = (index.read_text(encoding="utf-8", errors="replace") if index.exists()
+                else jmlr_dl.get(jmlr_dl.BASE).decode("utf-8", "replace"))
+        links = sorted(set(re.findall(r'href="(/papers/topic/[^"]+\.html|special/[^"]+\.html)"', page)))
+        folder.mkdir(parents=True, exist_ok=True)
+        print(f"Fetching {len(links)} JMLR topic pages for the granularity check...")
+        for link in links:
+            url = "https://www.jmlr.org" + link if link.startswith("/") else jmlr_dl.BASE + link
+            (folder / link.rsplit("/", 1)[-1]).write_bytes(jmlr_dl.get(url))
+            time.sleep(1)
+    except Exception as e:
+        print(f"Could not fetch JMLR's topic pages ({e}); choosing granularity without the external check.")
+
+
 def reference_labels():
     """paper key -> JMLR topic group, from the downloaded topic / special-issue pages."""
+    fetch_reference_pages()
     out = {}
     for f in sorted((JMLR_DIR / "topic_pages").glob("*.html")):
         group = f.stem
@@ -98,7 +123,8 @@ def score_partition(X, labels, ref_idx, ref_lab):
     from sklearn.metrics import adjusted_mutual_info_score, silhouette_score
     sizes = np.bincount(labels)
     sizes = sizes[sizes > 0]
-    return {"ami": adjusted_mutual_info_score(ref_lab, labels[ref_idx]),
+    # without reference pages (offline) AMI is 0 for every setting, so the choice falls to silhouette + balance
+    return {"ami": adjusted_mutual_info_score(ref_lab, labels[ref_idx]) if len(ref_idx) else 0.0,
             "silhouette": silhouette_score(X, labels, metric="cosine"),
             "largest": sizes.max() / len(labels), "smallest": int(sizes.min()), "n": len(sizes)}
 
@@ -106,7 +132,7 @@ def score_partition(X, labels, ref_idx, ref_lab):
 def sweep(keys, reps, ref):
     from scipy.cluster.hierarchy import fcluster, linkage
     from sklearn.cluster import KMeans
-    ref_idx = np.array([i for i, k in enumerate(keys) if k in ref])
+    ref_idx = np.array([i for i, k in enumerate(keys) if k in ref], dtype=int)
     groups = sorted({ref[keys[i]] for i in ref_idx})
     ref_lab = np.array([groups.index(ref[keys[i]]) for i in ref_idx])
     print(f"External check: {len(ref_idx)} papers from {len(groups)} JMLR topic groups\n")
@@ -192,7 +218,7 @@ def name_cluster(client, kind, terms, titles, area_terms=None, subtopic_names=No
     else:
         where = "one broad research area"
         rule = "2-5 words, broad enough to cover every subtopic listed, e.g. Kernel Methods, Causal Inference"
-    prompt = (f"In a clustering of all Journal of Machine Learning Research papers (2000-2025), these papers "
+    prompt = (f"In a clustering of all Journal of Machine Learning Research papers ({collection_info()[1]}-{collection_info()[2]}), these papers "
               f"form {where}.\n\nDistinctive terms: {', '.join(terms)}\n\n"
               + (f"Its subtopics:\n" + "\n".join(f"- {s}" for s in subtopic_names) + "\n\n" if subtopic_names else "")
               + "Most central papers:\n" + "\n".join(f"- {t}" for t in titles)
@@ -371,7 +397,7 @@ def draw_map(X, area_ids, topics):
                               va="center", bbox=dict(boxstyle="round,pad=0.25", fc="white", ec=cmap(j % 20),
                                                      alpha=0.85)))
     _separate_labels(fig, ax, labels)
-    ax.set_title(f"JMLR 2000-2025: {len(X)} papers by research area (t-SNE of paper embeddings)", fontsize=13)
+    ax.set_title(f"JMLR {collection_info()[1]}-{collection_info()[2]}: {len(X)} papers by research area (t-SNE of paper embeddings)", fontsize=13)
     ax.set_xticks([])
     ax.set_yticks([])
     for s in ax.spines.values():

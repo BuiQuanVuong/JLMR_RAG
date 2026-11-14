@@ -1,247 +1,255 @@
 # JMLR RAG
 
-A local search engine plus Claude-powered Q&A over the 4,138 JMLR papers in `..\JMLR`.
+A local research assistant for the **Journal of Machine Learning Research** (JMLR, about 4,100 open-access
+papers since 2000). It downloads the archive to your computer and builds a search index over the full text
+of every paper. You can then:
 
-`search` and `similar` run locally and cost nothing. `ask`, `reading`, `compare` and `chat` call the Claude
-API; for `ask` and `compare` that includes a query rewrite before retrieval (about $0.0004 and 4 s per new
-question, cached; `--no-rewrite` turns it off, and without an API key retrieval silently uses your words).
+- **search** by meaning, by keywords, or with Google Scholar-style queries (`"exact phrase" a OR b -exclude author:Name`);
+- **ask questions** and get answers written by Claude that cite the exact paper, page and section, with the
+  PDF opening at the cited page;
+- **compare** several papers side by side, or get an **ordered reading list** for a topic;
+- **browse a topic map** of 18 research areas and 70 subtopics, with trends, top authors, and a
+  **"recent advances" dashboard** per subtopic;
+- keep **conversations** with memory and resume them later, and export **BibTeX**.
 
-## Setup (one time)
+Use it from a **desktop app**, a **full-screen terminal app**, or the **command line**. Searching, browsing and
+BibTeX are local and free; only the Claude features use the Anthropic API, typically about $0.002 per
+question with Claude Haiku.
 
-All commands run from this folder, using the project's own Python:
+## Requirements
 
+| | |
+|---|---|
+| Python | 3.11 or newer |
+| Disk | about 8 GB (6-7 GB of PDFs + about 1 GB index) plus about 3.5 GB of downloaded models |
+| Memory | 8 GB RAM minimum, 16 GB+ recommended |
+| GPU | optional. An NVIDIA GPU with 4 GB+ makes indexing about 13× faster (~30 min instead of several hours) and answers faster; everything also runs on the CPU. |
+| Anthropic API key | optional; needed only for Claude features (answers, chat, compare, reading lists, topic names, the recent-advances summaries). Get one at https://platform.claude.com. |
+| OS | Windows, macOS or Linux. The desktop window uses the system web view (Edge WebView2 on Windows; see the [pywebview docs](https://pywebview.flowrl.com/) for macOS/Linux), and `--browser` works everywhere. |
+
+## Installation
+
+```bash
+git clone https://github.com/BuiQuanVuong/JLMR_RAG.git
+cd JLMR_RAG
+python -m venv .venv
+# Windows:      .venv\Scripts\activate
+# macOS/Linux:  source .venv/bin/activate
+
+# 1. PyTorch first, matching your hardware (pick the command at https://pytorch.org/get-started/locally/), e.g.
+pip install torch --index-url https://download.pytorch.org/whl/cu128     # NVIDIA GPU (CUDA 12.8)
+# pip install torch                                                       # CPU only
+
+# 2. Everything else, plus the `jmlr-rag` command
+pip install -e .            # or: pip install -e ".[dev]"  to include the test tools
+
+# 3. API key (optional, for the Claude features)
+cp .env.example .env        # Windows: copy .env.example .env
+# then edit .env and replace paste-your-key-here with your key
 ```
-cd D:\Academic_Papers\jmlr_rag
-.venv\Scripts\activate
+
+`.env` is ignored by git; keep it private. A key already set in your environment takes priority.
+
+## Building the collection (one time)
+
+Run these from the project folder with the virtual environment active. Every step can be stopped and
+re-run; finished work is skipped.
+
+| Step | Command | Time | Cost |
+|---|---|---|---|
+| 1. Download the archive | `python jmlr_dl.py` | 2-3 h, 6-7 GB | free |
+| 2. Extract text, passages, sections | `python build_index.py` | ~5 min | free |
+| 3. Compute embeddings | `python embed.py` | ~30 min on a GPU, several hours on CPU | free |
+| 4. Build the topic map | `python topics.py build` | ~2 min | ~$0.02 (topic names; `--no-names` for free) |
+| 5. Recent-advances summaries *(optional)* | `python advances.py` | ~2 min | ~$0.06 |
+
+- **Polite downloading:** the downloader makes at most 3 requests at a time with pauses. JMLR is run by
+  volunteers; please don't raise that.
+- **Locations:** papers go to `./papers` and the index to `./data`. Both can be changed in `.env` (see
+  Configuration).
+
+Afterwards, `jmlr-rag update` keeps everything current: it downloads, indexes, embeds and places new papers
+in the topic map in one go (a run with nothing new takes ~3 minutes; `--check` only reports what's missing).
+
+## Using it
+
+### Desktop app
+
+```bash
+jmlr-rag gui              # its own window
+jmlr-rag gui --browser    # the same app in your web browser (http://127.0.0.1:8765)
 ```
-
-1. `python build_index.py` extracts the text of every PDF into `data\jmlr.db`. It takes about 5 minutes and is already done.
-2. `python embed.py` computes semantic embeddings on the GPU. You can stop and resume it.
-3. For the Claude features, you need an Anthropic API key from https://platform.claude.com. Open `.env` in
-   this folder and replace `paste-your-key-here` with your key:
-   `ANTHROPIC_API_KEY=sk-ant-...`
-   The `.env` file stays on your machine. Don't share it or commit it anywhere. An `ANTHROPIC_API_KEY` that's
-   already set in your system environment takes priority over the file.
-
-## Usage
-
-**Desktop app (`jmlr-rag gui`):** opens a desktop window, built with NiceGUI and shown through pywebview
-using Windows' Edge WebView2. `jmlr-rag gui --browser` serves the same app at http://127.0.0.1:8765 in your
-browser instead. The index loads once in the background, in about 25 seconds.
 
 | Page | What it does |
 |---|---|
-| **Chat** | Conversation with memory. Answers stream as formatted Markdown; each [n] is a clickable pill that opens the PDF inside the app at the cited page; a collapsible sources list sits under each answer. `/compare` and `/reading` work in the input box. |
-| **Search** | Ranked papers with topic chips, highlighted snippets, and "Open PDF at p. N" and BibTeX buttons. Supports Scholar syntax with per-term counts. Year and research-area filters. |
-| **Paper page** | Abstract, topic, a clickable section outline that opens the PDF at each section, similar papers, BibTeX. |
-| **Topic map** | Interactive map of all papers by area: zoom, hover, click a paper. Selecting a topic shows papers per year, top authors and central papers; there is also a year filter and a rising/fading view. |
-| **Recent advances** | Momentum charts and one card per subtopic: where it's heading, 3-5 advances with links to the 2023-25 papers, sparkline, top authors. Regenerate with `python advances.py` (about $0.06 with Haiku). |
-| **Sessions** | Saved conversations; Resume reopens one in Chat. |
+| **Chat** | Conversation with memory. Answers stream in as formatted text, and each [n] is a clickable citation that opens the PDF inside the app at the cited page. A sources list sits under each answer. `/compare <question>` and `/reading <topic>` work in the input box. |
+| **Search** | Ranked papers with topic, highlighted best passage, "Open PDF at p. N" and BibTeX. Scholar syntax with per-term counts. Year and research-area filters. |
+| **Paper page** | Abstract, topic, clickable section outline (opens the PDF at that section), similar papers, BibTeX. |
+| **Topic map** | All papers on an interactive map by research area: zoom, hover, click. Selecting a topic shows papers per year, top authors and central papers. Year filter and rising/fading view. |
+| **Recent advances** | Momentum charts and a card per subtopic: where it's heading, 3-5 recent advances linked to the papers they come from, top authors. |
+| **Sessions** | Saved conversations; Resume reopens one. |
 
-Tests (no GPU, no API): `python -m pytest gui/ -p nicegui.testing.user_plugin -o asyncio_mode=auto -o main_file=`.
+The search models load in the background when the app starts, in about 20-30 s. Pages that don't need
+them (topic map, recent advances, sessions) work immediately.
 
-**Full-screen terminal app:** `jmlr-rag` with no arguments, in a terminal, opens a Textual app (`tui.py`) with four
-tabs:
-- **F1 Chat:** conversation with memory and streaming Markdown answers. A sources pane lists the cited
-  passages, and Enter on one opens its PDF. `/compare <question>` and `/reading <topic>` work here too.
-- **F2 Search:** ranked papers. The highlighted paper's abstract and best-matching passage are shown, and
-  Enter opens the PDF.
-- **F3 Topics:** the topic map as a tree (areas → subtopics → papers), with trends, top authors and
-  abstracts.
-- **F4 Sessions:** saved conversations. Enter resumes one.
+### Terminal app
 
-Ctrl+N starts a new conversation, Ctrl+O switches between Haiku and Opus, and Ctrl+Q quits.
-`jmlr-rag chat` keeps the line-based chat. `python tests\test_tui.py` checks the app headlessly, with no GPU
-and no API calls.
+`jmlr-rag` with no arguments opens a full-screen terminal app with four tabs: Chat, Search, Topics and Sessions
+(F1-F4). Ctrl+N starts a new chat, Ctrl+O switches between Claude Haiku and Opus, and Ctrl+Q quits.
+`jmlr-rag chat` gives a simpler line-by-line chat with Tab completion and saved input history.
 
-**Saved sessions:** every conversation is saved after each answer in `data\sessions\`. In the line chat,
-`/sessions` lists them, `/resume [N]` continues one, and `jmlr-rag chat --resume` reopens the most recent.
-`/new` starts a fresh conversation without deleting the old one.
+### Command line
 
-**One-word start:** `jmlr-rag search "..."`, `jmlr-rag topics` and so on work like `python ask.py ...`. It's installed in the project environment with
-`.venv\Scripts\python -m pip install --no-deps -e .`. To use it from any terminal, copy `bin\jmlr-rag.cmd`
-into a folder on your PATH, such as `%LOCALAPPDATA%\Microsoft\WindowsApps`.
-
-**In a terminal**, answers are rendered as formatted Markdown (headings, tables, bold) while they stream, and
-a spinner shows while models load. In chat:
-- Tab completes commands and paper keys.
-- Up/Down browse your earlier questions, which are saved in `data\chat_history.txt`.
-- The bottom bar shows the model, the memory turns and this session's API cost.
-
-When output is piped or redirected, everything falls back to plain text.
-
-```
-python ask.py search "kernel two-sample tests"            # rank papers (free, local)
-python ask.py ask "How is the MMD estimator's variance controlled?"      # cited answer, Claude Haiku 5.5
-python ask.py ask "Compare PAC-Bayes and Rademacher bounds for deep nets" --opus   # Claude Opus 5.5
-python ask.py reading "causal discovery" --since 2015     # ordered reading list
-python ask.py compare "How do these tests choose the kernel bandwidth?" -k 4     # side-by-side comparison
-python ask.py compare "..." --papers v13/gretton12a v24/21-1289                  # compare chosen papers
-python ask.py similar v20/13-124                          # papers like this one (free)
-python ask.py open v20/13-124                             # open the PDF
-python ask.py cite v20/13-124 v13/gretton12a --out refs.bib    # BibTeX (UTF-8; avoid PowerShell '>')
-python ask.py topics                                      # browse 18 research areas (free, local)
-python ask.py topics 14.1                                 # a subtopic: trend, top authors, central papers
-python ask.py topics --rising                             # what grew / faded, 2020-25 vs 2005-19
-python ask.py topics --for "your question"                # which subtopics a question falls into
-python ask.py chat                                        # interactive, remembers the conversation (see below)
+```bash
+jmlr-rag search "kernel two-sample tests"                          # rank papers (free)
+jmlr-rag search 'federated "differential privacy" -bandit'         # Scholar-style query (free)
+jmlr-rag ask "How is the bandwidth of an MMD test chosen?"         # cited answer (Haiku)
+jmlr-rag ask "Compare PAC-Bayes and Rademacher bounds" --opus      # harder questions (Opus)
+jmlr-rag compare "How do these tests choose the kernel bandwidth?" -k 4
+jmlr-rag reading "causal discovery" --since 2015                   # ordered reading list
+jmlr-rag similar v13/gretton12a                                    # papers like this one (free)
+jmlr-rag open v13/gretton12a                                       # open the PDF
+jmlr-rag cite v13/gretton12a v24/21-1289 --out refs.bib            # BibTeX (free)
+jmlr-rag topics | topics 14 | topics 14.1 | topics --rising | topics --for "your question"
+jmlr-rag chat --resume                                             # continue the last conversation
+jmlr-rag update                                                    # fetch and index new papers
 ```
 
-**Google Scholar-style queries (`boolq.py`):** `search` (and the app's Search tab) switches to Boolean
-matching when a query uses the syntax:
-- `"exact phrase"`
-- `a OR b`
-- `-exclude`
-- `intitle:word`
-- `author:Name`
-- every other word is required
+Paper keys look like `v13/gretton12a` (volume / JMLR id); every result shows them.
 
-For example: `search 'federated "differential privacy" -bandit'` or `search 'intitle:"two-sample" kernel author:Gretton'`.
-- **Whole papers:** as in Scholar, terms may appear anywhere in a paper (bibliographies are ignored), and
-  matching papers are ranked by relevance.
-- **No dead ends:** if no paper matches every term, it prints how many papers contain each term and lists
-  the papers matching the most terms, with what each one is missing.
-- **Filtering questions:** `ask` and `compare` take `--filter '<query>'` to answer only from matching papers.
-- **Literal matching:** matching is literal, like Scholar's. A common word such as `distributed` also
-  matches "distributed as Gaussian".
+| Option | Effect |
+|---|---|
+| `--since YEAR`, `--until YEAR` | restrict to a range of years |
+| `-k N` | number of passages (`ask`) or papers (`search`, `reading`, `compare`) |
+| `--opus` | answer with Claude Opus instead of Claude Haiku |
+| `--filter '<query>'` | `ask`/`compare` only from papers matching a Scholar-style query |
+| `--papers KEY ...` | `compare` these specific papers |
+| `--no-rewrite` | search with your exact words, with no rewrite call |
+| `--out FILE` | `cite` writes a UTF-8 `.bib` file (better than shell redirection on Windows) |
 
-Options: `--since YEAR`, `--until YEAR`, `-k N` for the number of passages or papers, and `--no-rewrite` to
-search with your own words only (no API call before retrieval).
+To run `jmlr-rag` without activating the virtual environment, put the `bin/` folder on your PATH. It holds
+launchers for Windows (`jmlr-rag.cmd`) and macOS/Linux (`jmlr-rag`).
 
-**Cost per question (approx.):** Haiku 5.5 about $0.001, Opus 5.5 about $0.03–0.08. Each answer prints its actual token use and cost.
+### Scholar-style queries
+
+| Write | Means |
+|---|---|
+| `"exact phrase"` | these words in this order (hyphens count as spaces) |
+| plain words | all required (plural forms match too) |
+| `a OR b` | either term; binds to its neighbours |
+| `-word` | exclude papers containing it |
+| `intitle:word`, `author:Name` | in the title / an author's name |
+
+Terms may appear anywhere in a paper, bibliographies excluded, as in Scholar, and matches are ranked by
+relevance. If nothing matches every term, you see how many papers contain each term and the closest
+matches, each with what it's missing. Matching is literal, so a common word like `distributed` also
+matches "distributed as Gaussian".
+
+### Costs
+
+| Action | Approximate cost |
+|---|---|
+| Question with Claude Haiku (default) | $0.002 |
+| Question with Claude Opus (`--opus`) | $0.03-0.08 |
+| `compare` of 4 papers (Haiku) | $0.006 |
+| Follow-up in chat | slightly more than a fresh question (the history is resent) |
+| Search, similar, topics, BibTeX, browsing | free |
+
+Each answer prints its exact token use and cost; the app shows the running total for the session.
 
 ## How it works
 
-- **Passages:** each paper is split into overlapping 300-word passages that keep their page numbers. Bibliography passages are detected and excluded.
-- **Hybrid retrieval:** BM25 keyword search (SQLite FTS5) and semantic search (`BAAI/bge-small-en-v1.5` embeddings) are fused with reciprocal rank fusion.
-- **Query rewriting (`rewrite.py`):** before retrieval, Claude Haiku 5.5 restates the question in the
-  terminology a paper would use (plus keywords), e.g. "a way to pick how wide the similarity function should
-  be" becomes "kernel bandwidth selection, Gaussian/RBF kernel, median heuristic". Four ranked lists are fused:
-  dense and BM25 for the original question, dense for the rewrite, BM25 for rewrite + keywords. The reranker
-  still scores against your original question. `ask` and `compare` (paper selection) use it; `search` and
-  `reading` don't (topic search is already at 100%). Rewrites are cached in `eval\rewrite_cache.json`; if
-  the API is unreachable or there is no key, the original question is used.
-- **Reranking:** the top 40 fused candidates are re-scored by a cross-encoder (`BAAI/bge-reranker-v2-m3`, on the GPU). It reads the title and the passage together. At most 3 passages come from any one paper, so answers draw on several papers.
-- **Section labels:** every passage knows its section (for example "Numerical Experiments / Empirical Size"). Labels come from the PDF's bookmarks or from detected numbered headings, and they're shown in answers and source lists. Re-run them with `python build_index.py --sections-only`.
-- **Answers:** Claude answers only from the retrieved passages and cites them as [n]. Each answer ends with the source list (paper, year, page, key) so you can open the PDF.
+1. **Passages:** each paper is split into overlapping 300-word passages that keep their page numbers and
+   section titles. Bibliography passages are excluded.
+2. **Query rewrite:** Claude Haiku restates your question in the terminology papers use, for example "how
+   wide the similarity function should be" becomes "kernel bandwidth selection". The result is cached;
+   without an API key, your own words are used.
+3. **Hybrid search:** keyword search (SQLite FTS5 / BM25) and meaning search (`BAAI/bge-small-en-v1.5`
+   embeddings), each run on both the original and the rewritten question, fused with reciprocal rank fusion.
+4. **Reranking:** a cross-encoder (`BAAI/bge-reranker-v2-m3`) re-scores the top 40 candidates against your
+   original question. At most 3 passages per paper are kept, 12 in total.
+5. **Answer:** Claude answers only from those passages, citing them as [n]. It says what the sources
+   don't cover, and marks background knowledge as such.
+6. **Comparison mode** builds a structured evidence record per paper first and compares the records,
+   which keeps findings attached to the right paper.
+7. **Chat memory:** a follow-up ("which of those handles noise?") is condensed into a standalone search.
+   The last few turns go to Claude as context, and conversations are saved to `data/sessions/`.
+8. **Topic map:** papers are clustered by Ward clustering of their abstract and full-text embeddings into
+   18 areas and 70 subtopics. The granularity was chosen by a sweep scored against JMLR's own topic pages;
+   Claude names the clusters.
 
-## Topic map (`topics.py`)
+[ARCHITECTURE.md](ARCHITECTURE.md) has the full design, with the measurements behind each decision.
 
-`python topics.py build` clusters every paper into **18 research areas** and **70 subtopics** (about 60
-papers each), names them with Claude Haiku (about $0.02, once), and draws `topic_map.png`. Browsing is free and
-local. It takes about 1 minute, plus 20 seconds for the map.
+## Quality
 
-- **What is clustered:** each paper's title+abstract embedding combined with the average of its passage
-  embeddings. This reflects the abstract and the full text.
-- **Choosing the granularity:** a sweep over 3 representations × Ward / k-means × 6–25 areas. Each
-  setting is scored on agreement (adjusted mutual information) with 182 papers on 18 of JMLR's own topic and
-  special-issue pages, silhouette, and size balance. The best setting with 8–25 areas, no area over 25% and
-  none under 15 papers won: combined / Ward / 18 areas (AMI 0.42, against 0.25–0.40 for most others).
-  Subtopic size was chosen the same way.
-- **Names:** subtopics are named first from their central papers and distinctive terms. Each area is then
-  named from all its subtopics, so the name covers everything inside it. Edit `data\topic_names.json` to
-  rename anything, then run `python topics.py map` to redraw the image.
-- **Secondary topics:** 912 papers (22%) are at least as close to another subtopic as to their own, so they
-  are listed there too.
-- **New papers:** `python topics.py assign` puts them in their nearest existing subtopic, so names stay
-  stable. Re-run `build` to re-cluster from scratch.
+Every design choice above was measured with an evaluation set included in the repo.
+`eval/questions.jsonl` has 140 questions with known answers:
+- **60 "standard":** use a paper's own terms.
+- **60 "hard":** plain words, none of the paper's terminology.
+- **20 topic queries.**
 
-`search` results show each paper's subtopic, and in `chat` the same views are available as
-`/topics [a | a.b | rising | for <question>]`.
+`python eval.py` scores retrieval for free in a few minutes.
 
-## Measuring retrieval quality
-
-`eval\questions.jsonl` holds 140 test questions with known answers, generated by `make_eval.py`:
-
-- **60 standard:** use the paper's own terms.
-- **60 hard:** plain words, none of the paper's terminology. This is the realistic case.
-- **20 topic:** short "find papers about" queries.
-
-`python eval.py --label <name>` scores the current system in about 8 minutes (12 with `--pool 100`). The
-query rewrites come from `eval\rewrite_cache.json`; fill it once with `python rewrite.py --eval` (about $0.05). Results go to
-`eval\results_<name>.csv`, and each run is appended to `eval\history.csv`. Add `--modes` to also score
-keyword-only and meaning-only search. Run it before and after every retrieval change.
-
-| Setup (2026-11-13) | Hard: paper / passage / MRR | Standard passage / MRR |
+| Retrieval setup | Hard: right paper / right passage / MRR | Standard: right passage |
 | --- | --- | --- |
-| Hybrid, no reranker | 68% / 50% / 0.45 | 85% / 0.94 |
-| + bge-reranker-v2-m3, 40 candidates | 72% / 57% / 0.49 | 97% / 1.00 |
-| + 100 candidates (`--no-rewrite`) | 73% / 62% / 0.49 | 97% / 1.00 |
-| + Claude query rewrite "fuse", 40 candidates (**current default**, 3.5 s/query) | 82% / 67% / 0.53 | 97% / 1.00 |
-| + Claude query rewrite "fuse", 100 candidates (6 s/query) | 77% / 65% / 0.50 | 97% / 1.00 |
+| Hybrid search only | 68% / 50% / 0.45 | 85% |
+| + reranker (40 candidates) | 72% / 57% / 0.49 | 97% |
+| + Claude query rewrite (**default**) | **82% / 67% / 0.53** | 97% |
 
-With rewriting on, 40 candidates beat 100: the extra 60 seem to give the reranker more distractors to
-promote. The 40-candidate result was reproduced exactly on the merged code (2026-11-14).
+"Right paper" means it is among the 12 passages given to Claude. Also tested and rejected: smaller
+rerankers, 100 rerank candidates, and a larger embedding model (Qwen3-Embedding-0.6B). The larger model
+was much better at meaning-only search but gave no end-to-end gain.
 
-Query-rewrite variants, all with 40 candidates (`python eval.py --pool 40 --rewrite MODE`; hard paper / passage /
-MRR): `off` 72% / 57% / 0.49; `bm25` (rewrite for BM25 only) 80% / 62% / 0.54; `both` (rewrite replaces the
-question for BM25 and dense) 72% / 55% / 0.51, and standard passage drops to 90%; `fuse` 82% / 67% / 0.53;
-`hyde` (original + hypothetical passage for dense) 77% / 65% / 0.51. Topic stays at 100% in all of them.
+**Answer faithfulness:** `python citecheck.py` has Claude Opus audit every claim in 30 Haiku answers
+against the passages they cite, for about $2.50:
 
-Also tested: MiniLM and bge-reranker-base rerankers (both worse on hard questions), and section headings in
-the reranker input (slightly worse). Topic search stays at 100%. Standard and topic questions are near
-100%, so they only catch regressions.
-
-## Comparison mode (`compare.py`)
-
-`compare` runs in two stages, so findings stay attached to the right paper:
-
-1. **Evidence records:** it picks the top papers (6 by default, `-k N`, or `--papers KEY ...`) and retrieves
-   the best 5 passages *within* each paper with hybrid search and the reranker. Claude Haiku 5.5 then turns
-   each paper into a structured record (problem, approach, setting, findings with citations, limitations,
-   relevance). These calls run in parallel.
-2. **Synthesis:** Claude (Haiku 5.5, or Opus 5.5 with `--opus`) compares the records. It writes a short
-   answer, a comparison table, agreements and tensions, open questions among these papers, and what to read.
-
-Citations look like `[P2.3]` (paper 2, passage 3), and each one is listed with its page and section. A
-4-paper comparison costs about $0.006 with Haiku, or about $0.06–0.10 with `--opus` for the synthesis.
-
-## Chat with memory (`conversation.py`)
-
-`python ask.py chat` remembers the conversation, so follow-ups like "Which of those papers handles
-functional data?" or "How does source 2 from your first answer pick its kernel?" work:
-
-1. **Query condensing:** from the second question on, Claude Haiku 5.5 rewrites the follow-up into a
-   standalone search query, using the last 3 turns (questions, answers and source titles). The query is
-   printed as `Searching for: ...` and costs about $0.0003. If that call fails, the question is searched
-   as typed.
-2. **Answering with context:** the last 4 turns (up to about 6k tokens) go to Claude as real
-   user/assistant messages. Older turns carry only their source *titles*, not the passages, and each turn
-   is labelled "Turn N". Citations [n] always refer to the current turn's source list, and Claude names a
-   paper from an earlier turn instead of reusing an old number.
-
-`/new` (or `/reset`) starts a fresh conversation. `/opus` and `/haiku` switch models and keep the memory.
-The prompt shows how many turns are remembered. `/search`, `/reading`, `/compare`, `/similar` and `/open`
-are one-shot: they neither use nor add to the memory. `python ask.py ask` has no memory. A follow-up costs
-a little more than a fresh question, because the history is sent again (Haiku: about $0.002–0.003).
-
-## Measuring answer quality (`citecheck.py`)
-
-`python citecheck.py` has Haiku answer 30 eval questions, then Claude Opus 5.5 audits every claim against
-the passages it cites, labelling each supported, partial, unsupported or uncited. It costs about $2.50 and
-stops at the `--budget` limit. `--opus` audits Opus answers instead.
-
-| Haiku 5.5 answers, 2026-11-14 | Result |
+| Claims | 438 |
 | --- | --- |
-| Claims audited | 438 in 30 answers |
 | Supported / partial / unsupported / uncited | 85% / 6% / 1% / 8% |
 | Citation precision (cited claims at least partly supported) | 99% |
 
-The few errors were a definition cited to the wrong source, proof details, and over-generalised
-summaries. Uncited claims are mostly Haiku's own inferences, occasionally a derived formula, so check
-numbers, formulas and attributions on the cited page. Details are in `eval\citecheck_haiku.jsonl`.
+Uncited claims are mostly the model's own summaries, occasionally a derived formula. As with any
+generated text, check numbers, formulas and attributions on the cited page.
 
-## Adding new papers later
+## Configuration
 
-`jmlr-rag update` does it in one go:
-1. downloads what JMLR has published since the last run, at the same polite pace;
-2. extracts text and refreshes the keyword index;
-3. embeds the new passages;
-4. places the new papers in the topic map.
+Settings in `.env` (or the environment):
 
-It then lists the new papers, and appends a summary to `data\update_log.txt`. With nothing new, a run takes about 3 minutes. `jmlr-rag update --check` only compares JMLR's listing with your index, without downloading anything. Close the full-screen app first, so it doesn't compete with the embedding step for the GPU.
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | none | Claude features |
+| `JMLR_PAPERS_DIR` | `./papers` | downloaded PDFs and catalog |
+| `JMLR_RAG_DATA` | `./data` | index, embeddings, topic map, sessions |
 
-## Known gaps
+Retrieval settings live in `common.py`: `RERANK_MODEL`, `RERANK_POOL` (40), `REWRITE` (`"fuse"`; `"off"`
+disables the rewrite), and `CHUNK_WORDS` / `CHUNK_OVERLAP` (changing these requires rebuilding the index).
 
-- `v24/22-1047`: the PDF on JMLR's server is empty (0 bytes), so it isn't indexed.
-- Text comes from the PDF text layer, so math formulas come through only roughly. Claude handles this reasonably, but exact equations should be checked in the PDF.
+## Tests
+
+```bash
+pip install -e ".[dev]"
+python -m pytest gui/ -p nicegui.testing.user_plugin -o asyncio_mode=auto -o main_file=   # desktop app
+python tests/test_tui.py        # terminal app
+python tests/test_boolq.py      # Scholar-style queries
+```
+
+None of these use the GPU or the API. They use a stand-in index and a fake Claude stream. The GUI and
+query tests read the local database, so build the collection first.
+
+## Limitations
+
+- **Formulas** are taken from the PDF text layer and come through only approximately; check equations in
+  the PDF.
+- **Coverage** is JMLR only. Much recent deep-learning work appears at conferences (NeurIPS, ICML, ICLR);
+  [docs/PLAN_PMLR.md](docs/PLAN_PMLR.md) sketches adding PMLR proceedings.
+- **Scholar matching is literal,** so common words also match unrelated uses.
+- **Startup:** loading the search models takes 20-30 seconds per start (mostly PyTorch and the reranker);
+  keep the app open between questions.
+- **One empty PDF:** one JMLR paper (`v24/22-1047`) has an empty PDF on the JMLR server and can't be
+  indexed.
+
+## Notes
+
+- The papers are © their authors and published open access by JMLR. This tool keeps a personal local copy
+  for research; don't redistribute the PDFs.
+- Answers are generated by Claude and can contain mistakes. The citations are there so you can check them.

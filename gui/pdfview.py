@@ -10,7 +10,7 @@ import os
 
 from nicegui import ui
 
-from common import JMLR_DIR, connect
+from common import JMLR_DIR, connect, open_path
 
 
 def pdf_url(key, page=None):
@@ -26,7 +26,7 @@ def paper_title(key):
 def open_external(key):
     path = JMLR_DIR / f"{key}.pdf"
     if path.exists():
-        os.startfile(str(path))
+        open_path(path)
     else:
         ui.notify(f"No PDF for {key}", type="warning")
 

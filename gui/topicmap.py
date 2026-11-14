@@ -19,6 +19,7 @@ import json
 
 from nicegui import run, ui
 
+from common import collection_info
 from gui import topicmap_data as tmd
 from gui.frame import PRIMARY
 from gui.pdfview import show_pdf
@@ -303,7 +304,7 @@ class TopicMapView:
                     + " truncate w-full").tooltip(name)
             ui.label(f"{size}").classes("text-xs text-gray-500 w-8 text-right shrink-0")
             ui.html(sparkline_svg(spark, color, w=64 if level == 2 else 76, h=18 if level == 2 else 22),
-                    sanitize=False).classes("shrink-0").tooltip("share of each year's papers, 2000-2025")
+                    sanitize=False).classes("shrink-0").tooltip("share of each year's papers, {}-{}".format(*collection_info()[1:]))
 
     def toggle_expand(self, area):
         self.expanded ^= {area}

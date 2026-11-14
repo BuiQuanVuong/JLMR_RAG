@@ -62,7 +62,7 @@ proceedings open access.
 - **Search quality with more distractors:** checked in step 3 against the JMLR scores (hard: 82% / 67% /
   0.53). If JMLR questions get noticeably worse, add venue weighting or keep sources as separate filters.
 - **Latency:** keyword ranking cost grows with the collection; step 3 measures it, item 4 above fixes it.
-- **Disk:** ~5–8 GB per ICML year; D: has ample space (~250 GB free).
+- **Disk:** ~5–8 GB per ICML year; check free space before starting.
 - **Licence and use:** PMLR papers are open access for reading. This is a personal research archive, as with
   JMLR; don't redistribute the PDFs.
 - **GitHub throttling:** back off on 429s, never more than 3 parallel requests, and resume on rerun.

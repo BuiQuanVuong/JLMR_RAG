@@ -22,6 +22,9 @@ def save(ids, embs):
 
 
 def main():
+    import argparse
+    argparse.ArgumentParser(description="Compute embeddings for papers and passages (incremental; GPU if "
+                            "available). Run after build_index.py.").parse_args()
     utf8_console()
     con = connect()
     model, device = load_encoder()

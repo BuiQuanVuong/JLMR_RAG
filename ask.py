@@ -28,7 +28,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")   # the embedding model is cached b
 
 import numpy as np
 
-from common import (CHUNK_EMB, CHUNK_IDS, ENV_FILE, JMLR_DIR, PAPER_EMB, PAPER_KEYS, QUERY_PREFIX,
+from common import (CHUNK_EMB, CHUNK_IDS, ENV_FILE, JMLR_DIR, open_path, PAPER_EMB, PAPER_KEYS, QUERY_PREFIX,
                     RERANK_MODEL, RERANK_POOL, REWRITE, connect, load_encoder, load_reranker, utf8_console)
 from rewrite import bm25_text, rewrite as rewrite_query
 import ui
@@ -490,7 +490,7 @@ def cmd_open(a):
         sys.exit(f"Unknown paper key {a.query!r} (format: v20/13-124)")
     path = pdf_path(p)
     print(f"Opening {p['title']}\n  {path}")
-    os.startfile(path)
+    open_path(path)
 
 
 def source_label(ix, h):

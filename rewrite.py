@@ -133,8 +133,14 @@ def bm25_text(rw):
 
 def main():
     from common import utf8_console
+    import argparse
+    ap = argparse.ArgumentParser(description="Show the Claude rewrite of a question, or fill the rewrite cache "
+                                 "for the evaluation set.")
+    ap.add_argument("--eval", action="store_true", help="rewrite every eval/questions.jsonl question (cached)")
+    ap.add_argument("question", nargs="*", help="a question to rewrite")
+    a = ap.parse_args()
     utf8_console()
-    args = sys.argv[1:]
+    args = ["--eval"] if a.eval else a.question
     if args[:1] == ["--eval"]:
         from concurrent.futures import ThreadPoolExecutor
         qs = [json.loads(l)["question"] for l in open(ROOT / "eval" / "questions.jsonl", encoding="utf-8")

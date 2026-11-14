@@ -1,5 +1,10 @@
 """Download all JMLR papers (PDF + abstract page + BibTeX) and build a CSV catalog.
-Resumable: existing non-empty files are skipped. Usage: python -I jmlr_dl.py OUTDIR
+
+Usage:  python jmlr_dl.py [OUTDIR]     (default: the papers folder from common.py, normally ./papers)
+
+Resumable: existing non-empty files are skipped, so re-running only fetches what is new. Polite by design:
+3 requests at a time with short pauses - JMLR is run by volunteers, please keep it that way.
+About 6-7 GB and 2-3 hours for the full archive.
 """
 import csv, html, os, re, sys, time, threading
 import urllib.request
@@ -8,7 +13,19 @@ from urllib.parse import urljoin
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 BASE = "https://www.jmlr.org/papers/"
-OUT = sys.argv[1] if __name__ == "__main__" else None   # importable (update.py reuses parse_volume)
+if __name__ == "__main__":   # importable without side effects (update.py reuses parse_volume)
+    import argparse
+    _ap = argparse.ArgumentParser(description="Download the JMLR archive (PDFs, abstracts, BibTeX, catalog). "
+                                  "Resumable and polite: 3 requests at a time with pauses.")
+    _ap.add_argument("outdir", nargs="?", help="where to put the papers (default: JMLR_PAPERS_DIR, normally ./papers)")
+    _a = _ap.parse_args()
+    if _a.outdir:
+        OUT = _a.outdir
+    else:
+        from common import JMLR_DIR
+        OUT = str(JMLR_DIR)
+else:
+    OUT = None
 UA = "Mozilla/5.0 (personal archive script)"
 WORKERS = 3
 lock = threading.Lock()

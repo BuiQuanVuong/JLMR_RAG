@@ -24,7 +24,7 @@ import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from common import DATA_DIR, connect, utf8_console
+from common import DATA_DIR, collection_info, connect, utf8_console
 import topics
 
 OUT = DATA_DIR / "advances.json"
@@ -33,10 +33,13 @@ PRICE_IN, PRICE_OUT = 0.10 / 1e6, 0.50 / 1e6       # USD per token
 BUDGET = 0.30                                       # hard stop, USD
 WORKERS = 6
 
-YEARS = list(range(2000, 2026))
-RECENT = (2023, 2025)
-WIDE = (2021, 2025)
-BASE = (2010, 2022)
+# windows relative to the newest year in the index (with data to 2025: recent 2023-25, wide 2021-25,
+# base 2010-22), so a later `update` moves them forward automatically
+_FIRST, LAST = collection_info()[1], collection_info()[2]
+YEARS = list(range(_FIRST, LAST + 1))
+RECENT = (LAST - 2, LAST)
+WIDE = (LAST - 4, LAST)
+BASE = (LAST - 15, LAST - 3)
 MIN_RECENT = 3              # below this, widen the window to WIDE
 MIN_SUMMARY = 2             # below this (even widened), no summary
 MAX_PAPERS = 22             # papers sent per call (most central first)

@@ -23,3 +23,6 @@ topic_map.png
 # editable-install metadata (pip install -e .)
 *.egg-info/
 build/
+
+# downloaded papers (default location; see JMLR_PAPERS_DIR)
+papers/

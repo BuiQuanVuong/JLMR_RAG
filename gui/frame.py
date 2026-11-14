@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 from nicegui import ui
 
+from common import collection_label
 from gui import state
 
 NAV = [  # (key, label, path, icon)
@@ -46,6 +47,6 @@ def frame(title, active):
                     ui.icon(icon)
                     ui.label(label)
         ui.separator().classes("my-3")
-        ui.label("4,138 JMLR papers, 2000-2025").classes("text-xs text-gray-500 px-3")
+        ui.label(collection_label()).classes("text-xs text-gray-500 px-3")
     with ui.column().classes("w-full max-w-[1400px] mx-auto p-4 gap-4"):
         yield

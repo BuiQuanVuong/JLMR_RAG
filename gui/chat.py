@@ -17,6 +17,7 @@ from nicegui import context, run, ui
 import ask
 import ui as term_ui
 from conversation import Conversation
+from common import collection_info
 from gui import state
 from gui.chat_render import (fix_lists, linkify_citations, oneshot_markdown, source_from_hit, source_from_label,
                              source_tooltip)
@@ -173,7 +174,7 @@ class ChatView:
             with self.loading:
                 self.loading_spinner = ui.spinner("dots", size="2.5em", color="primary")
                 self.loading_title = ui.label("Loading the search index").classes("text-lg font-medium")
-                self.loading_text = ui.label("Embeddings, search model and reranker for 4,138 papers - this takes "
+                self.loading_text = ui.label(f"Embeddings, search model and reranker for {collection_info()[0]:,} papers - this takes "
                                              "about half a minute. The chat opens as soon as it is ready.").classes(
                     "text-sm text-gray-500 text-center")
             self.welcome = ui.column().classes("w-full items-center gap-3 pt-6")
@@ -325,7 +326,7 @@ class ChatView:
     async def run_turn(self, question, answer):
         ix, conv, model = state.index(), state.STATE["conv"], state.STATE["model"]
         answer.set_status("Condensing the follow-up and searching..." if len(conv) else
-                          "Searching 4,138 papers...")
+                          f"Searching {collection_info()[0]:,} papers...")
         try:
             turn = await run.io_bound(ask.prepare_chat_turn, ix, conv, question)
         except Exception as e:

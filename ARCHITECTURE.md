@@ -78,7 +78,7 @@ This file explains how the parts fit together and why they are built the way the
 
 ## 3. Data
 
-**Papers on disk** (`D:\Academic_Papers\JMLR`): `vNN/<id>.pdf`, `vNN/abs/<id>.html` (abstract pages),
+**Papers on disk** (`JMLR_PAPERS_DIR`, default `./papers`): `vNN/<id>.pdf`, `vNN/abs/<id>.html` (abstract pages),
 `vNN/bib/<id>.bib` (volumes 10+), `catalog.csv` (volume, id, title, authors, citation, URLs).
 That is 6.3 GB. Paper `v24/22-1047` is missing because its PDF is empty on JMLR's server.
 
@@ -215,7 +215,8 @@ on the 5.5 models, and the stop reason is checked before content is read.
 
 ## 7. Hardware budget
 
-Measured on an Intel Core Ultra 7 155U, 32 GB RAM and an NVIDIA MX570 with 4 GB VRAM:
+Measured on the reference machine: a laptop with an Intel Core Ultra 7 155U, 32 GB RAM and an NVIDIA MX570
+(4 GB VRAM). Expect faster numbers on a desktop GPU and slower ones on CPU only:
 
 | Resource | Use |
 |---|---|
