@@ -259,8 +259,15 @@ scores to compare versions.
 
 ## 10. Known limits and next steps
 
-- **Embedding recall:** on hard questions, the gold passage isn't among the top 200 fused candidates
-  about 23% of the time without rewriting, so the small embedder is the weakest link. A better embedder
+- **Embedding model, tested and kept (2026-11-14):** on a 420-paper subset, Qwen3-Embedding-0.6B was much
+  better than bge-small at meaning-only search: right paper for hard questions 95% vs 83%.
+  - **No end-to-end gain:** in the full pipeline (`embed_test.py --pipeline`) both models reached hard
+    97% / 80%, and only MRR moved (0.81 vs 0.77). Keyword search, query rewriting and the reranker already
+    recover what the small model misses, so a ~10 h full re-embed (Qwen3 runs at 6.8 passages/s here) isn't
+    worth it.
+  - **bge-base:** no better than bge-small, even on meaning-only search.
+- **Earlier diagnosis:** without rewriting, on hard questions the gold passage wasn't among the top 200
+  fused candidates about 23% of the time. A better embedder
   would also sharpen the topic map, which is built on the same vectors. `embed_test.py`
   compares bge-base-en-v1.5 and Qwen3-Embedding-0.6B on a subset before committing to a full re-embed
   (about 1.5 h or about 8 h).

@@ -75,13 +75,89 @@ def score(name, emb, ids, chunk_paper, chunk_seq, qemb, qs, out):
           f"hard {row['hard'][0]:.0%} / {row['hard'][1]:.0%} / {row['hard'][2]:.0%}", flush=True)
 
 
+class QueryEncoder:
+    """Stands in for Index.model so passages() embeds queries with a candidate model: the bge query prefix
+    passages() adds is swapped for the candidate's own query prompt."""
+
+    def __init__(self, model, spec):
+        self.model, self.spec = model, spec
+
+    def encode(self, texts, **kw):
+        out = []
+        for t in texts:
+            if t.startswith(QUERY_PREFIX):
+                out.append(encode_queries(self.model, self.spec, [t[len(QUERY_PREFIX):]])[0])
+            else:                                   # document-style text (HyDE), no query prompt
+                out.append(self.model.encode([t], normalize_embeddings=True)[0])
+        return np.asarray(out, dtype=np.float32)
+
+
+def pipeline(a):
+    """End-to-end comparison on the subset: the complete retrieval pipeline (query rewrite, dense + BM25,
+    RRF, reranker), restricted to the subset papers, once with bge-small vectors and once with a
+    candidate's cached vectors. Only the embedding model differs."""
+    from ask import Index
+    con = connect()
+    qs = [json.loads(l) for l in open(ROOT / "eval" / "questions.jsonl", encoding="utf-8") if l.strip()]
+    qs = [q for q in qs if q["type"] == "passage"]
+    gold = {q["gold_paper"] for q in qs}
+    others = [r[0] for r in con.execute("SELECT key FROM papers WHERE status='done'") if r[0] not in gold]
+    random.Random(a.seed).shuffle(others)
+    subset = gold | set(others[: a.distractors])
+    rows = [r for r in con.execute("SELECT c.id, c.paper_key FROM chunks c WHERE c.is_ref = 0 ORDER BY c.id")
+            if r[1] in subset]
+    sub_ids = np.array([r[0] for r in rows])
+    print(f"Subset: {len(subset)} papers, {len(sub_ids)} passages; {len(qs)} questions; full pipeline\n")
+
+    ix = Index()
+
+    def run(label):
+        res = {"standard": [], "hard": []}
+        t0 = time.time()
+        for q in qs:
+            hits = ix.passages(q["question"], k=12, allowed=subset)
+            papers = [h["paper_key"] for h in hits]
+            rank = next((i for i, p in enumerate(papers, 1) if p == q["gold_paper"]), None)
+            psg = any(h["paper_key"] == q["gold_paper"] and abs(h["seq"] - q["gold_seq"]) <= 1 for h in hits)
+            res[q.get("difficulty", "standard")].append((rank is not None, psg, 1 / rank if rank else 0.0))
+        m = lambda g, i: sum(x[i] for x in res[g]) / len(res[g])  # noqa: E731
+        print(f"{label:<12} standard paper/passage/MRR {m('standard', 0):.0%} / {m('standard', 1):.0%} / "
+              f"{m('standard', 2):.2f}    hard {m('hard', 0):.0%} / {m('hard', 1):.0%} / {m('hard', 2):.2f}"
+              f"    ({(time.time() - t0) / len(qs):.1f} s/q)", flush=True)
+
+    run("bge-small")
+    for name in a.models:
+        cache = CACHE / f"{name}_d{a.distractors}_s{a.seed}.npy"
+        if not cache.exists():
+            print(f"{name}: no cached subset embeddings - run without --pipeline first")
+            continue
+        emb = np.load(cache).astype(np.float32)
+        cached_ids = np.array([r[0] for r in con.execute(
+            "SELECT c.id, c.paper_key FROM chunks c WHERE c.is_ref = 0 ORDER BY c.id") if r[1] in subset])
+        if len(cached_ids) != len(emb):
+            print(f"{name}: cached embeddings don't match the current subset ({len(emb)} vs {len(cached_ids)})")
+            continue
+        model_id, spec, _ = CANDIDATES[name]
+        key_of = dict(con.execute("SELECT id, paper_key FROM chunks").fetchall())
+        year = {k: (p["year"] or 0) for k, p in ix.papers.items()}
+        ix.chunk_ids, ix.chunk_emb = cached_ids, emb
+        ix.chunk_paper = np.array([key_of[int(i)] for i in cached_ids])
+        ix.chunk_year = np.array([year.get(k, 0) for k in ix.chunk_paper])
+        ix.model = QueryEncoder(load(model_id), spec)
+        run(name)
+
+
 def main():
     utf8_console()
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="+", default=list(CANDIDATES), choices=list(CANDIDATES))
     ap.add_argument("--distractors", type=int, default=300)
     ap.add_argument("--seed", type=int, default=3)
+    ap.add_argument("--pipeline", action="store_true",
+                    help="end-to-end comparison with the full retrieval pipeline (uses cached subset embeddings)")
     a = ap.parse_args()
+    if a.pipeline:
+        return pipeline(a)
 
     con = connect()
     qs = [json.loads(l) for l in open(ROOT / "eval" / "questions.jsonl", encoding="utf-8") if l.strip()]
